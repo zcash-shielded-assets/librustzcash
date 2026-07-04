@@ -458,6 +458,8 @@ pub struct Builder<P, U> {
     orchard_builder: Option<orchard::builder::Builder>,
     orchard_bundle_version: Option<orchard::bundle::BundleVersion>,
     ironwood_builder: Option<orchard::builder::Builder>,
+    #[cfg(feature = "zsa")]
+    issuance_builder: Option<crate::transaction::zsa_builder::ZsaBuilder>,
     _progress_notifier: U,
 }
 
@@ -653,6 +655,8 @@ impl<P: consensus::Parameters> Builder<P, ()> {
             orchard_builder,
             orchard_bundle_version,
             ironwood_builder,
+            #[cfg(feature = "zsa")]
+            issuance_builder: None,
             _progress_notifier: (),
         }
     }
@@ -682,6 +686,8 @@ impl<P: consensus::Parameters> Builder<P, ()> {
             orchard_builder: self.orchard_builder,
             orchard_bundle_version: self.orchard_bundle_version,
             ironwood_builder: self.ironwood_builder,
+            #[cfg(feature = "zsa")]
+            issuance_builder: self.issuance_builder,
             _progress_notifier,
         }
     }
@@ -1017,6 +1023,13 @@ impl<P: consensus::Parameters, U> Builder<P, U> {
     pub fn set_zip233_amount(&mut self, zip233_amount: Zatoshis) {
         self.zip233_amount = zip233_amount;
     }
+
+    /// Attaches a ZSA issuance builder. Only valid when
+    /// `params.orchard_mode() == OrchardMode::Zsa`.
+    #[cfg(feature = "zsa")]
+    pub fn set_zsa_builder(&mut self, zsa: crate::transaction::zsa_builder::ZsaBuilder) {
+        self.issuance_builder = Some(zsa);
+    }
 }
 
 impl<P: consensus::Parameters, U: sapling::builder::ProverProgress> Builder<P, U> {
@@ -1230,6 +1243,10 @@ impl<P: consensus::Parameters, U: sapling::builder::ProverProgress> Builder<P, U
             sapling_bundle,
             orchard_bundle,
             ironwood_bundle,
+            #[cfg(feature = "zsa")]
+            zsa_bundle: None,
+            #[cfg(feature = "zsa")]
+            issue_bundle: None,
         };
 
         //
@@ -1328,6 +1345,10 @@ impl<P: consensus::Parameters, U: sapling::builder::ProverProgress> Builder<P, U
             sapling_bundle,
             orchard_bundle,
             ironwood_bundle,
+            #[cfg(feature = "zsa")]
+            zsa_bundle: None,
+            #[cfg(feature = "zsa")]
+            issue_bundle: None,
         };
 
         // The unwrap() here is safe because the txid hashing
@@ -2047,6 +2068,8 @@ mod tests {
             orchard_builder: None,
             orchard_bundle_version: None,
             ironwood_builder: None,
+            #[cfg(feature = "zsa")]
+            issuance_builder: None,
             _progress_notifier: (),
         };
 

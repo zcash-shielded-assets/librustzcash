@@ -185,6 +185,23 @@ impl TryFrom<usize> for TxIndex {
 #[cfg(feature = "std")]
 memuse::impl_no_dynamic_usage!(TxIndex);
 
+/// The Orchard protocol variant active on a network.
+///
+/// ZSA and Ironwood are mutually exclusive protocol variants that both
+/// follow the NU6.2 era. They use different circuits, note encryption
+/// layouts, and transaction formats. A network picks one — they never
+/// co-exist on the same chain.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+pub enum OrchardMode {
+    /// Standard Orchard protocol (52-byte compact notes, vanilla circuit).
+    /// Used by mainnet Ironwood and standard testnet/regtest.
+    #[default]
+    Normal,
+    /// ZSA (Zcash Shielded Assets) variant: 84-byte compact notes, ZSA
+    /// circuit with asset support, issuance and burn operations.
+    Zsa,
+}
+
 /// The enumeration of known Zcash network types.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum NetworkType {
@@ -402,6 +419,15 @@ pub trait Parameters: Clone {
     /// provided block height on the network to which this Parameters value applies.
     fn is_nu_active(&self, nu: NetworkUpgrade, height: BlockHeight) -> bool {
         self.activation_height(nu).is_some_and(|h| h <= height)
+    }
+
+    /// Returns the Orchard protocol variant for this network.
+    ///
+    /// Defaults to [`OrchardMode::Normal`] for backward compatibility with
+    /// all existing `Parameters` implementations. Override in
+    /// [`LocalNetwork`](crate::local_consensus::LocalNetwork) to enable ZSA.
+    fn orchard_mode(&self) -> OrchardMode {
+        OrchardMode::Normal
     }
 }
 

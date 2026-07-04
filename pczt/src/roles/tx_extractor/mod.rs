@@ -147,6 +147,7 @@ impl Authorization for Unbound {
     type TransparentAuth = ::transparent::pczt::Unbound;
     type SaplingAuth = ::sapling::pczt::Unbound;
     type OrchardAuth = ::orchard::pczt::Unbound;
+    type IssueAuth = ::orchard::issuance::EffectsOnly;
 }
 
 /// Errors that can occur while extracting a transaction from a PCZT.

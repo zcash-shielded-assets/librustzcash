@@ -270,7 +270,7 @@ pub(crate) fn write_output_v4<W: Write>(
     writer.write_all(&output.cv().to_bytes())?;
     writer.write_all(output.cmu().to_bytes().as_ref())?;
     writer.write_all(output.ephemeral_key().as_ref())?;
-    writer.write_all(output.enc_ciphertext())?;
+    writer.write_all(output.enc_ciphertext().as_ref())?;
     writer.write_all(output.out_ciphertext())?;
     writer.write_all(output.zkproof())
 }
@@ -282,7 +282,7 @@ fn write_output_v5_without_proof<W: Write>(
     writer.write_all(&output.cv().to_bytes())?;
     writer.write_all(output.cmu().to_bytes().as_ref())?;
     writer.write_all(output.ephemeral_key().as_ref())?;
-    writer.write_all(output.enc_ciphertext())?;
+    writer.write_all(output.enc_ciphertext().as_ref())?;
     writer.write_all(output.out_ciphertext())
 }
 

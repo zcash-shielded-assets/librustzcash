@@ -1,4 +1,4 @@
-use crate::consensus::{BlockHeight, NetworkType, NetworkUpgrade, Parameters};
+use crate::consensus::{BlockHeight, NetworkType, NetworkUpgrade, OrchardMode, Parameters};
 
 /// a `LocalNetwork` setup should define the activation heights
 /// of network upgrades. `None` is considered as "not activated"
@@ -50,6 +50,8 @@ pub struct LocalNetwork {
     pub nu6_3: Option<BlockHeight>,
     #[cfg(zcash_unstable = "nu7")]
     pub nu7: Option<BlockHeight>,
+    /// The Orchard protocol variant for this network.
+    pub orchard_mode: OrchardMode,
 }
 
 /// Parameters implementation for `LocalNetwork`
@@ -74,12 +76,16 @@ impl Parameters for LocalNetwork {
             NetworkUpgrade::Nu7 => self.nu7,
         }
     }
+
+    fn orchard_mode(&self) -> OrchardMode {
+        self.orchard_mode
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use crate::{
-        consensus::{BlockHeight, NetworkConstants, NetworkUpgrade, Parameters},
+        consensus::{BlockHeight, NetworkConstants, NetworkUpgrade, OrchardMode, Parameters},
         constants,
         local_consensus::LocalNetwork,
     };
@@ -112,6 +118,7 @@ mod tests {
             nu6_3: Some(expected_nu6_3),
             #[cfg(zcash_unstable = "nu7")]
             nu7: Some(expected_nu7),
+            orchard_mode: OrchardMode::Normal,
         };
 
         assert!(regtest.is_nu_active(NetworkUpgrade::Overwinter, expected_overwinter));
@@ -157,6 +164,7 @@ mod tests {
             nu6_3: Some(expected_nu6_3),
             #[cfg(zcash_unstable = "nu7")]
             nu7: Some(expected_nu7),
+            orchard_mode: OrchardMode::Normal,
         };
 
         assert_eq!(
@@ -234,6 +242,7 @@ mod tests {
             nu6_3: Some(expected_nu6_3),
             #[cfg(zcash_unstable = "nu7")]
             nu7: Some(expected_nu7),
+            orchard_mode: OrchardMode::Normal,
         };
 
         assert_eq!(regtest.coin_type(), constants::regtest::COIN_TYPE);

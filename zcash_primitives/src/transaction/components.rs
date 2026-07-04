@@ -1,4 +1,6 @@
 //! Structs representing the components within Zcash transactions.
+#[cfg(feature = "zsa")]
+pub mod issuance;
 pub mod orchard;
 pub mod sapling;
 pub mod sprout;

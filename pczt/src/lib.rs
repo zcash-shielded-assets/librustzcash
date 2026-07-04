@@ -556,6 +556,7 @@ impl Authorization for EffectsOnly {
     type TransparentAuth = ::transparent::bundle::EffectsOnly;
     type SaplingAuth = ::sapling::bundle::EffectsOnly;
     type OrchardAuth = ::orchard::bundle::EffectsOnly;
+    type IssueAuth = ::orchard::issuance::EffectsOnly;
 }
 
 /// Helper to produce the correct sighash for a PCZT.

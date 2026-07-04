@@ -9,6 +9,9 @@ pub mod sighash_v6;
 
 pub mod txid;
 
+#[cfg(feature = "zsa")]
+pub mod zsa_builder;
+
 #[cfg(any(test, feature = "test-dependencies"))]
 pub mod tests;
 
@@ -45,7 +48,26 @@ use zcash_protocol::constants::{
 
 use zcash_protocol::constants::{V6_TX_VERSION, V6_VERSION_GROUP_ID};
 
+#[cfg(feature = "zsa")]
+use {
+    crate::transaction::components::issuance,
+    orchard::issuance::IssueBundle,
+    orchard::zsa::OrchardZSADomain,
+};
+
 pub use zcash_protocol::TxId;
+
+/// An Orchard bundle that may be either the standard (Ironwood / vanilla) or
+/// the ZSA variant with 84-byte notes and asset support.
+#[cfg(feature = "zsa")]
+pub enum OrchardBundle<A: orchard::bundle::Authorization> {
+    OrchardVanilla(orchard::Bundle<A, ZatBalance>),
+    OrchardZSA(orchard::Bundle<A, ZatBalance, OrchardZSADomain>),
+}
+
+#[cfg(feature = "zsa")]
+#[cfg(feature = "zsa")]
+pub use self::zsa_builder::ZsaBuilder;
 
 /// The set of defined transaction format versions.
 ///
@@ -244,6 +266,9 @@ pub trait Authorization {
     type TransparentAuth: transparent::Authorization;
     type SaplingAuth: sapling::bundle::Authorization;
     type OrchardAuth: orchard::bundle::Authorization;
+    /// The authorization type for an Orchard issuance bundle.
+    #[cfg(feature = "zsa")]
+    type IssueAuth: orchard::issuance::IssueAuth;
 }
 
 /// [`Authorization`] marker type for fully-authorized transactions.
@@ -254,6 +279,8 @@ impl Authorization for Authorized {
     type TransparentAuth = transparent::Authorized;
     type SaplingAuth = sapling::bundle::Authorized;
     type OrchardAuth = orchard::bundle::Authorized;
+    #[cfg(feature = "zsa")]
+    type IssueAuth = orchard::issuance::Signed;
 }
 
 /// [`Authorization`] marker type for non-coinbase transactions without authorization data.
@@ -269,6 +296,8 @@ impl Authorization for Unauthorized {
         sapling_builder::InProgress<sapling_builder::Proven, sapling_builder::Unsigned>;
     type OrchardAuth =
         orchard::builder::InProgress<orchard::builder::Unproven, orchard::builder::Unauthorized>;
+    #[cfg(feature = "zsa")]
+    type IssueAuth = orchard::issuance::AwaitingSighash;
 }
 
 /// [`Authorization`] marker type for coinbase transactions without authorization data.
@@ -282,6 +311,8 @@ impl Authorization for Coinbase {
         sapling_builder::InProgress<sapling_builder::Proven, sapling_builder::Unsigned>;
     type OrchardAuth =
         orchard::builder::InProgress<orchard::builder::Unproven, orchard::builder::Unauthorized>;
+    #[cfg(feature = "zsa")]
+    type IssueAuth = orchard::issuance::EffectsOnly;
 }
 
 /// A Zcash transaction.
@@ -319,6 +350,12 @@ pub struct TransactionData<A: Authorization> {
     sapling_bundle: Option<sapling::Bundle<A::SaplingAuth, ZatBalance>>,
     orchard_bundle: Option<orchard::bundle::Bundle<A::OrchardAuth, ZatBalance>>,
     ironwood_bundle: Option<orchard::bundle::Bundle<A::OrchardAuth, ZatBalance>>,
+    /// ZSA-specific bundle (84-byte notes, asset support).
+    #[cfg(feature = "zsa")]
+    zsa_bundle: Option<orchard::bundle::Bundle<A::OrchardAuth, ZatBalance, OrchardZSADomain>>,
+    /// Issuance bundle for ZSA asset creation.
+    #[cfg(feature = "zsa")]
+    issue_bundle: Option<IssueBundle<A::IssueAuth>>,
 }
 
 impl Clone for TransactionData<Authorized> {
@@ -335,6 +372,10 @@ impl Clone for TransactionData<Authorized> {
             sapling_bundle: self.sapling_bundle.clone(),
             orchard_bundle: self.orchard_bundle.clone(),
             ironwood_bundle: self.ironwood_bundle.clone(),
+            #[cfg(feature = "zsa")]
+            zsa_bundle: None,
+            #[cfg(feature = "zsa")]
+            issue_bundle: None,
         }
     }
 }
@@ -377,6 +418,10 @@ impl<A: Authorization> TransactionData<A> {
             sapling_bundle,
             orchard_bundle,
             ironwood_bundle: None,
+            #[cfg(feature = "zsa")]
+            zsa_bundle: None,
+            #[cfg(feature = "zsa")]
+            issue_bundle: None,
         }
     }
 
@@ -415,6 +460,10 @@ impl<A: Authorization> TransactionData<A> {
             sapling_bundle,
             orchard_bundle,
             ironwood_bundle,
+            #[cfg(feature = "zsa")]
+            zsa_bundle: None,
+            #[cfg(feature = "zsa")]
+            issue_bundle: None,
         }
     }
 
@@ -454,6 +503,20 @@ impl<A: Authorization> TransactionData<A> {
 
     pub fn ironwood_bundle(&self) -> Option<&orchard::Bundle<A::OrchardAuth, ZatBalance>> {
         self.ironwood_bundle.as_ref()
+    }
+
+    /// Returns the ZSA bundle if present.
+    #[cfg(feature = "zsa")]
+    pub fn zsa_bundle(
+        &self,
+    ) -> Option<&orchard::Bundle<A::OrchardAuth, ZatBalance, OrchardZSADomain>> {
+        self.zsa_bundle.as_ref()
+    }
+
+    /// Returns the issuance bundle if present.
+    #[cfg(feature = "zsa")]
+    pub fn issue_bundle(&self) -> Option<&IssueBundle<A::IssueAuth>> {
+        self.issue_bundle.as_ref()
     }
 
     #[cfg(all(zcash_unstable = "nu7", feature = "zip-233"))]
@@ -576,6 +639,10 @@ impl<A: Authorization> TransactionData<A> {
             sapling_bundle: f_sapling(self.sapling_bundle),
             orchard_bundle: f_orchard(self.orchard_bundle),
             ironwood_bundle: f_orchard(self.ironwood_bundle),
+            #[cfg(feature = "zsa")]
+            zsa_bundle: None,
+            #[cfg(feature = "zsa")]
+            issue_bundle: None,
         }
     }
 
@@ -615,6 +682,10 @@ impl<A: Authorization> TransactionData<A> {
             sapling_bundle: f_sapling(self.sapling_bundle)?,
             orchard_bundle: f_orchard(self.orchard_bundle)?,
             ironwood_bundle: f_orchard(self.ironwood_bundle)?,
+            #[cfg(feature = "zsa")]
+            zsa_bundle: None,
+            #[cfg(feature = "zsa")]
+            issue_bundle: None,
         })
     }
 
@@ -658,6 +729,10 @@ impl<A: Authorization> TransactionData<A> {
                     |f, a| f.map_authorization(a),
                 )
             }),
+            #[cfg(feature = "zsa")]
+            zsa_bundle: None,
+            #[cfg(feature = "zsa")]
+            issue_bundle: None,
         }
     }
 }
@@ -819,6 +894,10 @@ impl Transaction {
                 }),
                 orchard_bundle: None,
                 ironwood_bundle: None,
+            #[cfg(feature = "zsa")]
+            zsa_bundle: None,
+            #[cfg(feature = "zsa")]
+            issue_bundle: None,
             },
         })
     }
@@ -870,6 +949,10 @@ impl Transaction {
             sapling_bundle,
             orchard_bundle,
             ironwood_bundle: None,
+            #[cfg(feature = "zsa")]
+            zsa_bundle: None,
+            #[cfg(feature = "zsa")]
+            issue_bundle: None,
         };
 
         Ok(Self::from_data_v5(data))
@@ -903,6 +986,10 @@ impl Transaction {
             sapling_bundle,
             orchard_bundle,
             ironwood_bundle,
+            #[cfg(feature = "zsa")]
+            zsa_bundle: None,
+            #[cfg(feature = "zsa")]
+            issue_bundle: None,
         };
 
         Ok(Self::from_data_v6(data))
@@ -1231,6 +1318,10 @@ pub mod testing {
                 sapling_bundle,
                 orchard_bundle,
                 ironwood_bundle,
+            #[cfg(feature = "zsa")]
+            zsa_bundle: None,
+            #[cfg(feature = "zsa")]
+            issue_bundle: None,
             }
         }
     }
@@ -1260,6 +1351,10 @@ pub mod testing {
                 sapling_bundle,
                 orchard_bundle,
                 ironwood_bundle,
+            #[cfg(feature = "zsa")]
+            zsa_bundle: None,
+            #[cfg(feature = "zsa")]
+            issue_bundle: None,
             }
         }
     }
@@ -1287,6 +1382,10 @@ pub mod testing {
                 sapling_bundle,
                 orchard_bundle,
                 ironwood_bundle,
+            #[cfg(feature = "zsa")]
+            zsa_bundle: None,
+            #[cfg(feature = "zsa")]
+            issue_bundle: None,
             }
         }
     }

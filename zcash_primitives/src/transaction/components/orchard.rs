@@ -11,6 +11,7 @@ use orchard::{
     Action, Anchor, ValuePool,
     bundle::{Authorization, Authorized, BundleVersion, Flags},
     note::{ExtractedNoteCommitment, Nullifier, TransmittedNoteCiphertext},
+    note_encryption::OrchardDomain,
     primitives::redpallas::{self, SigType, Signature, SpendAuth, VerificationKey},
     value::ValueCommitment,
 };
@@ -230,18 +231,21 @@ pub fn read_cmx<R: Read>(mut reader: R) -> io::Result<ExtractedNoteCommitment> {
     })
 }
 
-pub fn read_note_ciphertext<R: Read>(mut reader: R) -> io::Result<TransmittedNoteCiphertext> {
-    let mut tnc = TransmittedNoteCiphertext {
-        epk_bytes: [0u8; 32],
-        enc_ciphertext: [0u8; 580],
-        out_ciphertext: [0u8; 80],
-    };
+pub fn read_note_ciphertext<R: Read>(mut reader: R) -> io::Result<TransmittedNoteCiphertext<OrchardDomain>> {
+    use zcash_note_encryption::note_bytes::NoteBytesData;
+    let mut epk_bytes = [0u8; 32];
+    let mut enc_ciphertext = NoteBytesData([0u8; 580]);
+    let mut out_ciphertext = [0u8; 80];
 
-    reader.read_exact(&mut tnc.epk_bytes)?;
-    reader.read_exact(&mut tnc.enc_ciphertext)?;
-    reader.read_exact(&mut tnc.out_ciphertext)?;
+    reader.read_exact(&mut epk_bytes)?;
+    reader.read_exact(enc_ciphertext.as_mut())?;
+    reader.read_exact(&mut out_ciphertext)?;
 
-    Ok(tnc)
+    Ok(TransmittedNoteCiphertext {
+        epk_bytes,
+        enc_ciphertext,
+        out_ciphertext,
+    })
 }
 
 pub fn read_action_without_auth<R: Read>(mut reader: R) -> io::Result<Action<()>> {
@@ -354,10 +358,10 @@ pub fn write_cmx<W: Write>(mut writer: W, cmx: &ExtractedNoteCommitment) -> io::
 
 pub fn write_note_ciphertext<W: Write>(
     mut writer: W,
-    nc: &TransmittedNoteCiphertext,
+    nc: &TransmittedNoteCiphertext<OrchardDomain>,
 ) -> io::Result<()> {
     writer.write_all(&nc.epk_bytes)?;
-    writer.write_all(&nc.enc_ciphertext)?;
+    writer.write_all(nc.enc_ciphertext.as_ref())?;
     writer.write_all(&nc.out_ciphertext)
 }
 
