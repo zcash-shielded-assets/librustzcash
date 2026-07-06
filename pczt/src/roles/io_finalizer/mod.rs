@@ -26,7 +26,10 @@ impl IoFinalizer {
     }
 
     /// Finalizes the IO of the PCZT.
-    pub fn finalize_io(self) -> Result<Pczt, Error> {
+    ///
+    /// Returns the finalized PCZT along with the shielded sighash, which is
+    /// required by the Issuer role for signing the ZSA issue bundle.
+    pub fn finalize_io(self) -> Result<(Pczt, [u8; 32]), Error> {
         let Self { pczt } = self;
 
         let has_orchard_actions = !pczt.orchard.actions.is_empty();
@@ -96,14 +99,17 @@ impl IoFinalizer {
                 .map_err(Error::IronwoodFinalize)?;
         }
 
-        Ok(Pczt {
-            global,
-            transparent: crate::transparent::Bundle::serialize_from(transparent),
-            sapling: crate::sapling::Bundle::serialize_from(sapling),
-            orchard: crate::orchard::Bundle::serialize_from(orchard),
-            ironwood: crate::orchard::Bundle::serialize_from(ironwood),
-            issue,
-        })
+        Ok((
+            Pczt {
+                global,
+                transparent: crate::transparent::Bundle::serialize_from(transparent),
+                sapling: crate::sapling::Bundle::serialize_from(sapling),
+                orchard: crate::orchard::Bundle::serialize_from(orchard),
+                ironwood: crate::orchard::Bundle::serialize_from(ironwood),
+                issue,
+            },
+            shielded_sighash,
+        ))
     }
 }
 
