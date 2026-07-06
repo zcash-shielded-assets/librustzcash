@@ -1002,13 +1002,15 @@ impl<P: consensus::Parameters, U> Builder<P, U> {
             })
             .map_err(FeeError::Bundle)?;
 
-        // On NU7 (ZSA), issuance notes replace Ironwood actions in the bundle.
+        // On NU7 (ZSA), issuance actions are counted alongside Ironwood actions
+        // for fee calculation since they occupy the same bundle slot.
         #[cfg(feature = "zsa")]
-        let ironwood_actions = ironwood_actions
-            + self
-                .issuance_builder
-                .as_ref()
-                .map_or(0, |b| b.issuance_action_counts().0 as usize);
+        let issue_actions = self
+            .issuance_builder
+            .as_ref()
+            .map_or(0usize, |b| b.issuance_action_counts().0 as usize);
+        #[cfg(not(feature = "zsa"))]
+        let issue_actions = 0usize;
 
         fee_rule
             .fee_required(
@@ -1039,7 +1041,7 @@ impl<P: consensus::Parameters, U> Builder<P, U> {
                         )
                     })
                     .map_err(FeeError::Bundle)?,
-                ironwood_actions,
+                ironwood_actions + issue_actions,
             )
             .map_err(FeeError::FeeRule)
     }
@@ -1272,7 +1274,6 @@ impl<P: consensus::Parameters, U: sapling::builder::ProverProgress> Builder<P, U
             orchard_bundle,
             ironwood_bundle,
             #[cfg(feature = "zsa")]
-            #[cfg(feature = "zsa")]
             issue_bundle: None,
         };
 
@@ -1372,7 +1373,6 @@ impl<P: consensus::Parameters, U: sapling::builder::ProverProgress> Builder<P, U
             sapling_bundle,
             orchard_bundle,
             ironwood_bundle,
-            #[cfg(feature = "zsa")]
             #[cfg(feature = "zsa")]
             issue_bundle: None,
         };

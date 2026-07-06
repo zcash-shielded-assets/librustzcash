@@ -26,7 +26,9 @@ use alloc::vec::Vec;
 use getset::Getters;
 
 #[cfg(any(feature = "io-finalizer", feature = "signer", feature = "tx-extractor"))]
-use zcash_protocol::constants::{V6_TX_VERSION, V6_VERSION_GROUP_ID};
+use zcash_protocol::constants::{
+    V6_TX_VERSION, V6_VERSION_GROUP_ID, ZSA_V6_VERSION_GROUP_ID,
+};
 #[cfg(all(
     any(feature = "io-finalizer", feature = "signer", feature = "tx-extractor"),
     feature = "zip-233",
@@ -37,14 +39,14 @@ use {
     common::{Global, determine_lock_time},
     zcash_primitives::transaction::{Authorization, TransactionData, TxVersion},
     zcash_protocol::{
-        consensus::{BranchId, OrchardProtocolRevision},
+        consensus::BranchId,
         constants::{V5_TX_VERSION, V5_VERSION_GROUP_ID},
     },
 };
 
 #[cfg(any(feature = "io-finalizer", feature = "signer"))]
 use zcash_primitives::transaction::sighash_v6::v6_signature_hash;
-#[cfg(all(feature = "issuer", any(feature = "io-finalizer", feature = "signer")))]
+#[cfg(all(feature = "zsa", any(feature = "io-finalizer", feature = "signer")))]
 use zcash_primitives::transaction::sighash_v6_zsa::zsa_v6_signature_hash;
 #[cfg(any(feature = "io-finalizer", feature = "signer"))]
 use {
@@ -97,9 +99,6 @@ pub struct Pczt {
 
     /// ZSA issuance bundle data (intents and actions).
     pub(crate) issue: issue::Bundle,
-
-    /// The shielded sighash covering the unsigned issue bundle, set by the IoFinalizer.
-    pub(crate) shielded_sighash: Option<[u8; 32]>,
 }
 
 /// Types and operations for the v1 Pczt encoding.
@@ -163,7 +162,6 @@ pub mod v1 {
                 orchard: pczt.orchard.into(),
                 ironwood: orchard::EMPTY_IRONWOOD,
                 issue: Default::default(),
-                shielded_sighash: None,
             }
         }
     }
@@ -277,7 +275,6 @@ pub mod v2 {
                     .map(orchard::Bundle::from)
                     .unwrap_or(orchard::EMPTY_IRONWOOD),
                 issue: pczt.issue.unwrap_or_default(),
-                shielded_sighash: None,
             }
         }
     }
@@ -436,7 +433,7 @@ impl Pczt {
         // Extracts the ZSA issue bundle from PCZT wire format.
         // Only relevant for Nu7 (ZSA) transactions. Callers should return
         // `Ok(None)` if no issuance data is present or for non-ZSA branches.
-        #[cfg(feature = "issuer")]
+        #[cfg(feature = "zsa")]
         extract_issue: impl FnOnce(
             &crate::issue::Bundle,
         ) -> Result<
@@ -468,7 +465,8 @@ impl Pczt {
 
         let version = match (global.tx_version, global.version_group_id) {
             (V5_TX_VERSION, V5_VERSION_GROUP_ID) => Ok(TxVersion::V5),
-            (V6_TX_VERSION, V6_VERSION_GROUP_ID) => Ok(TxVersion::V6),
+            (V6_TX_VERSION, V6_VERSION_GROUP_ID)
+            | (V6_TX_VERSION, ZSA_V6_VERSION_GROUP_ID) => Ok(TxVersion::V6),
             (version, version_group_id) => Err(ExtractError::UnsupportedTxVersion {
                 version,
                 version_group_id,
@@ -482,11 +480,10 @@ impl Pczt {
                     return Err(ExtractError::IronwoodNotSupported.into());
                 }
             }
-            // The v6 transaction format does not exist prior to NU6.3 (the first
-            // upgrade under which the Orchard protocol is at revision V3).
+            // The v6 transaction format is only valid under NU6.3 (Ironwood) and
+            // NU7 (ZSA). Reject it under any other consensus branch.
             TxVersion::V6 => {
-                // ZSA (Nu7) uses V6 tx format with V2 orchard protocol revision.
-                if orchard_protocol_revision < OrchardProtocolRevision::V2 {
+                if !TxVersion::V6.valid_in_branch(consensus_branch_id) {
                     return Err(ExtractError::UnsupportedConsensusBranchId.into());
                 }
             }
@@ -516,12 +513,12 @@ impl Pczt {
         let sapling_bundle = extract_sapling(&sapling)?;
         let orchard_bundle = extract_orchard(&orchard)?;
         let ironwood_bundle = extract_ironwood(&ironwood)?;
-        #[cfg(feature = "issuer")]
+        #[cfg(feature = "zsa")]
         let issue_bundle = extract_issue(&issue)?;
 
         let tx_data = match version {
             // ZSA (Nu7) uses a different V6 layout: issue bundle instead of ironwood.
-            #[cfg(feature = "issuer")]
+            #[cfg(feature = "zsa")]
             TxVersion::V6 if consensus_branch_id == BranchId::Nu7 => {
                 TransactionData::from_parts_zsa(
                     consensus_branch_id,
@@ -582,7 +579,7 @@ impl Pczt {
             |s| s.extract_effects().map_err(ExtractError::SaplingExtract),
             |o| o.extract_effects().map_err(ExtractError::OrchardExtract),
             |i| i.extract_effects().map_err(ExtractError::IronwoodExtract),
-            #[cfg(feature = "issuer")]
+            #[cfg(feature = "zsa")]
             |issue| Ok(issue.to_effects()),
         )
         .map(|parsed| parsed.tx_data)
@@ -626,13 +623,13 @@ pub(crate) fn sighash(
     match tx_data.version() {
         TxVersion::V5 => v5_signature_hash(tx_data, signable_input, txid_parts),
         TxVersion::V6 => {
-            #[cfg(feature = "issuer")]
+            #[cfg(feature = "zsa")]
             if tx_data.consensus_branch_id() == BranchId::Nu7 {
-                return zsa_v6_signature_hash(tx_data, signable_input, txid_parts)
-                    .as_ref()
-                    .try_into()
-                    .expect("correct length");
+                zsa_v6_signature_hash(tx_data, signable_input, txid_parts)
+            } else {
+                v6_signature_hash(tx_data, signable_input, txid_parts)
             }
+            #[cfg(not(feature = "zsa"))]
             v6_signature_hash(tx_data, signable_input, txid_parts)
         }
         _ => unreachable!("PCZT only supports v5 and v6 transaction data"),
@@ -712,11 +709,10 @@ mod extraction_tests {
 
     #[test]
     fn v6_pczt_with_post_nu5_branch_extracts() {
-        let mut pczt = Creator::new(BranchId::Nu6_3.into(), 10_000_000, 133, [0; 32], [0; 32])
+        // NU6.3 (Ironwood) supports V6 transactions.
+        let pczt = Creator::new(BranchId::Nu6_3.into(), 10_000_000, 133, [0; 32], [0; 32])
             .unwrap()
             .build();
-        // Nu6_2 has OrchardProtocolRevision::V2, which is valid for V6 transactions.
-        pczt.global.consensus_branch_id = BranchId::Nu6_2.into();
         assert!(pczt.into_effects().is_ok());
     }
 }

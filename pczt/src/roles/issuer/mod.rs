@@ -113,17 +113,17 @@ impl Issuer {
     ///
     /// Must run after IoFinalizer (which computes the shielded sighash that
     /// covers the unsigned issue bundle and stores it on the PCZT).
+    ///
+    /// `sighash` is the shielded sighash computed from the transaction data.
     #[cfg(feature = "zcp-builder")]
     pub fn sign(
         self,
         isk: &IssueAuthKey<ZSASchnorr>,
+        sighash: [u8; 32],
     ) -> Result<Pczt, Error> {
         // Reconstruct AwaitingSighash bundle from wire format
         let bundle = deserialize_bundle(&self.pczt.issue)
             .ok_or(Error::InvalidIssueData)?;
-
-        let sighash = self.pczt.shielded_sighash
-            .ok_or(Error::MissingSighash)?;
 
         let signed = bundle
             .prepare(sighash)
@@ -274,10 +274,6 @@ pub enum Error {
     ZsaNotInitialized,
     /// The data stored in `pczt.issue` could not be deserialized.
     InvalidIssueData,
-    /// The shielded sighash has not been stored on the PCZT.
-    /// The [`IoFinalizer`](crate::roles::io_finalizer::IoFinalizer) must
-    /// run before the Issuer's sign phase.
-    MissingSighash,
     /// Failed to sign the issuance bundle.
     IssuanceSign(orchard::issuance::Error),
     /// No issuance intents to build from.
@@ -296,7 +292,6 @@ impl core::fmt::Display for Error {
             Error::NoOrchardActions => write!(f, "PCZT has no orchard actions"),
             Error::ZsaNotInitialized => write!(f, "ZSA builder is not initialized"),
             Error::InvalidIssueData => write!(f, "pczt.issue contains invalid data"),
-            Error::MissingSighash => write!(f, "shielded sighash not set — IoFinalizer must run before sign"),
             Error::IssuanceSign(e) => write!(f, "Issuance signing error: {e}"),
             Error::NoIssuanceIntents => write!(f, "no issuance intents to build from"),
             Error::AlreadyBuilt => write!(f, "cannot build from intents when actions already exist"),

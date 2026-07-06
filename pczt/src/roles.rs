@@ -35,7 +35,7 @@ pub mod spend_finalizer;
 #[cfg(feature = "tx-extractor")]
 pub mod tx_extractor;
 
-#[cfg(feature = "issuer")]
+#[cfg(feature = "zsa")]
 pub mod issuer;
 
 #[cfg(test)]

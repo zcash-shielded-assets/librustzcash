@@ -18,7 +18,8 @@ impl super::Prover {
             transparent,
             sapling,
             orchard,
-            ironwood, ..
+            ironwood,
+            issue,
         } = self.pczt;
 
         let mut bundle = sapling.into_parsed().map_err(SaplingError::Parser)?;
@@ -34,8 +35,7 @@ impl super::Prover {
                 sapling: crate::sapling::Bundle::serialize_from(bundle),
                 orchard,
                 ironwood,
-                issue: Default::default(),
-                shielded_sighash: None,
+                issue,
             },
         })
     }

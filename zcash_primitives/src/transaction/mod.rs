@@ -46,10 +46,8 @@ use ::sapling::builder as sapling_builder;
 
 use zcash_protocol::constants::{
     V3_TX_VERSION, V3_VERSION_GROUP_ID, V4_TX_VERSION, V4_VERSION_GROUP_ID, V5_TX_VERSION,
-    V5_VERSION_GROUP_ID,
+    V5_VERSION_GROUP_ID, V6_TX_VERSION, V6_VERSION_GROUP_ID, ZSA_V6_VERSION_GROUP_ID,
 };
-
-use zcash_protocol::constants::{V6_TX_VERSION, V6_VERSION_GROUP_ID};
 
 #[cfg(feature = "zsa")]
 pub(crate) use orchard::issuance::IssueBundle;
@@ -69,7 +67,6 @@ pub enum OrchardBundle<A: orchard::bundle::Authorization> {
     OrchardZSA(orchard::Bundle<A, ZatBalance, OrchardZSADomain>),
 }
 
-#[cfg(feature = "zsa")]
 #[cfg(feature = "zsa")]
 pub use self::zsa_builder::ZsaBuilder;
 
@@ -113,7 +110,8 @@ impl TxVersion {
                 (V3_TX_VERSION, V3_VERSION_GROUP_ID) => Ok(TxVersion::V3),
                 (V4_TX_VERSION, V4_VERSION_GROUP_ID) => Ok(TxVersion::V4),
                 (V5_TX_VERSION, V5_VERSION_GROUP_ID) => Ok(TxVersion::V5),
-                (V6_TX_VERSION, V6_VERSION_GROUP_ID) => Ok(TxVersion::V6),
+                (V6_TX_VERSION, V6_VERSION_GROUP_ID)
+                | (V6_TX_VERSION, ZSA_V6_VERSION_GROUP_ID) => Ok(TxVersion::V6),
                 _ => Err(io::Error::new(
                     io::ErrorKind::InvalidData,
                     "Unknown transaction format",
@@ -146,21 +144,24 @@ impl TxVersion {
             }
     }
 
-    pub fn version_group_id(&self) -> u32 {
+    pub fn version_group_id(&self, consensus_branch_id: BranchId) -> u32 {
         match self {
             TxVersion::Sprout(_) => 0,
             TxVersion::V3 => V3_VERSION_GROUP_ID,
             TxVersion::V4 => V4_VERSION_GROUP_ID,
             TxVersion::V5 => V5_VERSION_GROUP_ID,
-            TxVersion::V6 => V6_VERSION_GROUP_ID,
+            TxVersion::V6 => match consensus_branch_id {
+                BranchId::Nu7 => ZSA_V6_VERSION_GROUP_ID,
+                _ => V6_VERSION_GROUP_ID,
+            },
         }
     }
 
-    pub fn write<W: Write>(&self, mut writer: W) -> io::Result<()> {
+    pub fn write<W: Write>(&self, mut writer: W, consensus_branch_id: BranchId) -> io::Result<()> {
         writer.write_u32_le(self.header())?;
         match self {
             TxVersion::Sprout(_) => Ok(()),
-            _ => writer.write_u32_le(self.version_group_id()),
+            _ => writer.write_u32_le(self.version_group_id(consensus_branch_id)),
         }
     }
 
@@ -414,7 +415,6 @@ impl<A: Authorization> TransactionData<A> {
             orchard_bundle,
             ironwood_bundle: None,
             #[cfg(feature = "zsa")]
-            #[cfg(feature = "zsa")]
             issue_bundle: None,
         }
     }
@@ -454,7 +454,6 @@ impl<A: Authorization> TransactionData<A> {
             sapling_bundle,
             orchard_bundle,
             ironwood_bundle,
-            #[cfg(feature = "zsa")]
             #[cfg(feature = "zsa")]
             issue_bundle: None,
         }
@@ -668,7 +667,6 @@ impl<A: Authorization> TransactionData<A> {
             orchard_bundle: f_orchard(self.orchard_bundle),
             ironwood_bundle: f_orchard(self.ironwood_bundle),
             #[cfg(feature = "zsa")]
-            #[cfg(feature = "zsa")]
             issue_bundle: None,
         }
     }
@@ -680,6 +678,9 @@ impl<A: Authorization> TransactionData<A> {
     ///
     /// `f_orchard` is also applied to the Ironwood bundle because Ironwood is
     /// represented with the Orchard bundle type.
+    ///
+    /// This method does NOT map the issue bundle; callers should use
+    /// [`try_map_bundles_zsa`] for ZSA (Nu7) transactions.
     pub fn try_map_bundles<B: Authorization, E>(
         self,
         f_transparent: impl FnOnce(
@@ -709,7 +710,6 @@ impl<A: Authorization> TransactionData<A> {
             sapling_bundle: f_sapling(self.sapling_bundle)?,
             orchard_bundle: f_orchard(self.orchard_bundle)?,
             ironwood_bundle: f_orchard(self.ironwood_bundle)?,
-            #[cfg(feature = "zsa")]
             #[cfg(feature = "zsa")]
             issue_bundle: None,
         })
@@ -896,8 +896,11 @@ impl Transaction {
                 let header_fragment = Self::read_v6_header_fragment(&mut base_reader)?;
                 #[cfg(feature = "zsa")]
                 if header_fragment.consensus_branch_id == BranchId::Nu7 {
-                    return Self::read_zsa(base_reader, version, header_fragment);
+                    Self::read_zsa(base_reader, version, header_fragment)
+                } else {
+                    Self::read_v6_from_header(base_reader, version, header_fragment)
                 }
+                #[cfg(not(feature = "zsa"))]
                 Self::read_v6_from_header(base_reader, version, header_fragment)
             }
         }
@@ -978,7 +981,6 @@ impl Transaction {
                 orchard_bundle: None,
                 ironwood_bundle: None,
             #[cfg(feature = "zsa")]
-            #[cfg(feature = "zsa")]
             issue_bundle: None,
             },
         })
@@ -1032,7 +1034,6 @@ impl Transaction {
             orchard_bundle,
             ironwood_bundle: None,
             #[cfg(feature = "zsa")]
-            #[cfg(feature = "zsa")]
             issue_bundle: None,
         };
 
@@ -1070,7 +1071,6 @@ impl Transaction {
             sapling_bundle,
             orchard_bundle,
             ironwood_bundle,
-            #[cfg(feature = "zsa")]
             #[cfg(feature = "zsa")]
             issue_bundle: None,
         };
@@ -1191,7 +1191,7 @@ impl Transaction {
             ));
         }
 
-        self.version.write(&mut writer)?;
+        self.version.write(&mut writer, self.consensus_branch_id)?;
 
         self.write_transparent(&mut writer)?;
         writer.write_u32_le(self.lock_time)?;
@@ -1292,7 +1292,7 @@ impl Transaction {
     }
 
     pub fn write_v5_header<W: Write>(&self, mut writer: W) -> io::Result<()> {
-        self.version.write(&mut writer)?;
+        self.version.write(&mut writer, self.consensus_branch_id)?;
         writer.write_u32_le(u32::from(self.consensus_branch_id))?;
         writer.write_u32_le(self.lock_time)?;
         writer.write_u32_le(u32::from(self.expiry_height))?;
@@ -1300,7 +1300,7 @@ impl Transaction {
     }
 
     pub fn write_v6_header<W: Write>(&self, mut writer: W) -> io::Result<()> {
-        self.version.write(&mut writer)?;
+        self.version.write(&mut writer, self.consensus_branch_id)?;
         writer.write_u32_le(u32::from(self.consensus_branch_id))?;
         writer.write_u32_le(self.lock_time)?;
         writer.write_u32_le(u32::from(self.expiry_height))?;
@@ -1491,7 +1491,6 @@ pub mod testing {
                 orchard_bundle,
                 ironwood_bundle,
             #[cfg(feature = "zsa")]
-            #[cfg(feature = "zsa")]
             issue_bundle: None,
             }
         }
@@ -1522,7 +1521,6 @@ pub mod testing {
                 sapling_bundle,
                 orchard_bundle,
                 ironwood_bundle,
-            #[cfg(feature = "zsa")]
             #[cfg(feature = "zsa")]
             issue_bundle: None,
             }

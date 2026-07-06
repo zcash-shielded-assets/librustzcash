@@ -147,7 +147,7 @@ pub fn v4_signature_hash<
             .to_state();
 
         h.update(&tx.version.header().to_le_bytes());
-        h.update(&tx.version.version_group_id().to_le_bytes());
+        h.update(&tx.version.version_group_id(tx.consensus_branch_id).to_le_bytes());
         update_hash!(
             h,
             hash_type & SIGHASH_ANYONECANPAY == 0,

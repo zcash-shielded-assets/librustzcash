@@ -124,6 +124,7 @@ fn read_recipient<R: Read>(mut reader: R) -> io::Result<Address> {
     ))
 }
 
+#[allow(dead_code)]
 pub(crate) fn read_asset<R: Read>(reader: &mut R) -> io::Result<AssetBase> {
     let mut bytes = [0u8; 32];
     reader.read_exact(&mut bytes)?;

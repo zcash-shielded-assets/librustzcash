@@ -235,6 +235,7 @@ pub struct IssueNote {
 /// authorization type. Dispatches between [`Bundle::to_awaiting_sighash`] and
 /// [`Bundle::to_signed`] based on the [`IssueAuth`] type parameter.
 #[cfg(feature = "orchard")]
+#[allow(dead_code)]
 pub(crate) trait FromPcztIssue: orchard::issuance::IssueAuth + Sized {
     fn from_pczt_issue(wire: &Bundle) -> Option<orchard::issuance::IssueBundle<Self>>;
 }

@@ -10,7 +10,8 @@ impl super::Prover {
             transparent,
             sapling,
             orchard,
-            ironwood, ..
+            ironwood,
+            issue,
         } = self.pczt;
 
         let mut bundle = orchard
@@ -31,8 +32,7 @@ impl super::Prover {
                 sapling,
                 orchard: crate::orchard::Bundle::serialize_from(bundle),
                 ironwood,
-                issue: Default::default(),
-                shielded_sighash: None,
+                issue,
             },
         })
     }
@@ -43,7 +43,8 @@ impl super::Prover {
             transparent,
             sapling,
             orchard,
-            ironwood, ..
+            ironwood,
+            issue,
         } = self.pczt;
 
         let mut bundle = ironwood
@@ -61,8 +62,7 @@ impl super::Prover {
                 sapling,
                 orchard,
                 ironwood: crate::orchard::Bundle::serialize_from(bundle),
-                issue: Default::default(),
-                shielded_sighash: None,
+                issue,
             },
         })
     }

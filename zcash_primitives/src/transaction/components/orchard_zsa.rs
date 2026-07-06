@@ -3,16 +3,14 @@
 use alloc::vec::Vec;
 use corez::io::{self, Read, Write};
 use nonempty::NonEmpty;
-use orchard::bundle::{Authorized, Bundle, BundleVersion, Flags};
-use orchard::primitives::redpallas::{self, SigType, Signature, SpendAuth, Binding};
+use orchard::bundle::{Authorized, BundleVersion, Flags};
+use orchard::primitives::redpallas::{self, SigType, SpendAuth, Binding};
 use orchard::tree::Anchor;
 use zcash_encoding::{Array, CompactSize, Vector};
 use zcash_protocol::value::ZatBalance;
 
 use crate::encoding::{ReadBytesExt, WriteBytesExt};
 use crate::transaction::Transaction;
-
-const GROTH_PROOF_SIZE: usize = 48 + 96 + 48;
 
 fn read_versioned_sig<R: Read, T: SigType>(
     mut reader: R,

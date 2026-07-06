@@ -60,7 +60,6 @@ fn merge(lhs: Pczt, rhs: Pczt) -> Result<Pczt, Error> {
         orchard,
         ironwood,
         issue: lhs.issue.clone(),
-        shielded_sighash: lhs.shielded_sighash,
     })
 }
 

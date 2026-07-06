@@ -61,7 +61,7 @@ impl IoFinalizer {
             |s| s.extract_effects().map_err(ExtractError::SaplingExtract),
             |o| o.extract_effects().map_err(ExtractError::OrchardExtract),
             |i| i.extract_effects().map_err(ExtractError::IronwoodExtract),
-            #[cfg(feature = "issuer")]
+            #[cfg(feature = "zsa")]
             |issue| Ok(issue.to_effects()),
         )?;
 
@@ -103,7 +103,6 @@ impl IoFinalizer {
             orchard: crate::orchard::Bundle::serialize_from(orchard),
             ironwood: crate::orchard::Bundle::serialize_from(ironwood),
             issue,
-            shielded_sighash: Some(shielded_sighash),
         })
     }
 }

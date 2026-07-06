@@ -240,7 +240,7 @@ fn hash_header_txid_data(
     let mut h = hasher(ZCASH_HEADERS_HASH_PERSONALIZATION);
 
     h.write_u32_le(version.header()).unwrap();
-    h.write_u32_le(version.version_group_id()).unwrap();
+    h.write_u32_le(version.version_group_id(consensus_branch_id)).unwrap();
     h.write_u32_le(consensus_branch_id.into()).unwrap();
     h.write_u32_le(lock_time).unwrap();
     h.write_u32_le(expiry_height.into()).unwrap();

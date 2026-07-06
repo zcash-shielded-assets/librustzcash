@@ -12,7 +12,7 @@ use zcash_address::{ConversionError, ZcashAddress};
 use zcash_keys::address::{Address, UnifiedAddress};
 use zcash_primitives::transaction::fees::{
     FeeRule,
-    transparent::{self as transparent_fees, InputSize},
+    transparent::InputSize,
     zip317::{P2PKH_STANDARD_INPUT_SIZE, P2PKH_STANDARD_OUTPUT_SIZE},
 };
 use zcash_protocol::{
@@ -1396,7 +1396,7 @@ impl<DbT: InputSource> ShieldingSelector for GreedyInputSelector<DbT> {
                 BlockHeight::from(target_height),
                 transparent_inputs
                     .iter()
-                    .map(transparent_fees::InputView::serialized_size),
+                    .map(::zcash_primitives::transaction::fees::transparent::InputView::serialized_size),
                 std::iter::empty::<usize>(),
                 0,
                 sapling_output_count,

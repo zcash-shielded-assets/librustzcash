@@ -79,11 +79,9 @@ impl<'a> TransactionExtractor<'a> {
 
         // Save the signed issue bundle before extraction (Nu7/ZSA).
         // The Issuer Phase 2 should have already signed it.
-        #[cfg(feature = "issuer")]
+        #[cfg(feature = "zsa")]
         let saved_signed_issue = pczt.issue.to_signed();
-        #[cfg(feature = "issuer")]
-        let stored_sighash = pczt.shielded_sighash;
-        #[cfg(feature = "issuer")]
+        #[cfg(feature = "zsa")]
         let consensus_branch_id =
             zcash_protocol::consensus::BranchId::try_from(pczt.global.consensus_branch_id)
                 .map_err(|_| crate::ExtractError::UnknownConsensusBranchId)
@@ -106,7 +104,7 @@ impl<'a> TransactionExtractor<'a> {
                 i.extract()
                     .map_err(|e| Error::Ironwood(IronwoodError::Extract(e)))
             },
-            #[cfg(feature = "issuer")]
+            #[cfg(feature = "zsa")]
             |issue| Ok(issue.to_effects()),
         )?;
 
@@ -114,12 +112,8 @@ impl<'a> TransactionExtractor<'a> {
         let txid_parts = tx_data.digest(TxIdDigester);
         let shielded_sighash = signature_hash(&tx_data, &SignableInput::Shielded, &txid_parts);
 
-        #[cfg(feature = "issuer")]
-        let sighash_bytes: [u8; 32] = stored_sighash
-            .unwrap_or(*shielded_sighash.as_ref());
-
         // Create the binding signatures.
-        #[cfg(feature = "issuer")]
+        #[cfg(feature = "zsa")]
         let tx_data = if consensus_branch_id == zcash_protocol::consensus::BranchId::Nu7 {
             // ZSA (Nu7): preserve the signed issue bundle through binding
             // signature application.
@@ -127,14 +121,14 @@ impl<'a> TransactionExtractor<'a> {
                 |t| Ok(t.map(|t| t.map_authorization(transparent::RemoveInputInfo))),
                 |s| {
                     s.map(|s| {
-                        s.apply_binding_signature(sighash_bytes, OsRng)
+                        s.apply_binding_signature(*shielded_sighash.as_ref(), OsRng)
                             .ok_or(Error::SighashMismatch)
                     })
                     .transpose()
                 },
                 |o| {
                     o.map(|o| {
-                        o.apply_binding_signature(sighash_bytes, OsRng)
+                        o.apply_binding_signature(*shielded_sighash.as_ref(), OsRng)
                             .ok_or(Error::SighashMismatch)
                     })
                     .transpose()
@@ -146,21 +140,21 @@ impl<'a> TransactionExtractor<'a> {
                 |t| Ok(t.map(|t| t.map_authorization(transparent::RemoveInputInfo))),
                 |s| {
                     s.map(|s| {
-                        s.apply_binding_signature(sighash_bytes, OsRng)
+                        s.apply_binding_signature(*shielded_sighash.as_ref(), OsRng)
                             .ok_or(Error::SighashMismatch)
                     })
                     .transpose()
                 },
                 |o| {
                     o.map(|o| {
-                        o.apply_binding_signature(sighash_bytes, OsRng)
+                        o.apply_binding_signature(*shielded_sighash.as_ref(), OsRng)
                             .ok_or(Error::SighashMismatch)
                     })
                     .transpose()
                 },
             )?
         };
-        #[cfg(not(feature = "issuer"))]
+        #[cfg(not(feature = "zsa"))]
         let tx_data = tx_data.try_map_bundles(
             |t| Ok(t.map(|t| t.map_authorization(transparent::RemoveInputInfo))),
             |s| {

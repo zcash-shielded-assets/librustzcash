@@ -44,7 +44,7 @@ impl Updater {
             sapling,
             orchard,
             ironwood,
-            ..
+            issue,
         } = self.pczt;
 
         f(GlobalUpdater(&mut global));
@@ -56,8 +56,7 @@ impl Updater {
                 sapling,
                 orchard,
                 ironwood,
-                issue: Default::default(),
-                shielded_sighash: None,
+                issue,
             },
         }
     }

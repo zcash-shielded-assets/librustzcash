@@ -28,7 +28,6 @@ impl super::Updater {
                 orchard,
                 ironwood,
                 issue: Default::default(),
-                shielded_sighash: None,
             },
         })
     }

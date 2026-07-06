@@ -9,7 +9,7 @@ use std::sync::{
 
 use memuse::DynamicUsage;
 use zcash_note_encryption::{
-    BatchDomain, COMPACT_NOTE_SIZE, Domain, ENC_CIPHERTEXT_SIZE, ShieldedOutput, batch,
+    BatchDomain, Domain, ShieldedOutput, batch,
 };
 use zcash_primitives::{block::BlockHash, transaction::TxId};
 

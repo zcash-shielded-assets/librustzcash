@@ -31,7 +31,6 @@ impl super::Verifier {
                 orchard: crate::orchard::Bundle::serialize_from(bundle),
                 ironwood,
                 issue: Default::default(),
-                shielded_sighash: None,
             },
         })
     }
@@ -63,7 +62,6 @@ impl super::Verifier {
                 orchard,
                 ironwood: crate::orchard::Bundle::serialize_from(bundle),
                 issue: Default::default(),
-                shielded_sighash: None,
             },
         })
     }

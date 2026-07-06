@@ -159,19 +159,10 @@ tx-extractor = [
     "transparent",
 ]
 
-## Enables the Issuer role for ZSA asset minting.
-issuer = [
-    "dep:rand_core",
-    "rand_core/getrandom",
-    "dep:orchard",
-    "orchard/zsa",
-    "zcp-builder",
-]
 
 # Undocumented internal feature flag for enabling features needed for tests.
 internal-tests = [
     "io-finalizer",
-    "issuer",
     "prover",
     "signer",
     "spend-finalizer",
