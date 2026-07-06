@@ -13,7 +13,7 @@ impl super::Updater {
             transparent,
             sapling,
             orchard,
-            ironwood,
+            ironwood, ..
         } = self.pczt;
 
         let mut bundle = orchard
@@ -32,6 +32,8 @@ impl super::Updater {
                 sapling,
                 orchard: crate::orchard::Bundle::serialize_from(bundle),
                 ironwood,
+                issue: Default::default(),
+                shielded_sighash: None,
             },
         })
     }
@@ -46,7 +48,7 @@ impl super::Updater {
             transparent,
             sapling,
             orchard,
-            ironwood,
+            ironwood, ..
         } = self.pczt;
 
         let mut bundle = ironwood
@@ -62,6 +64,8 @@ impl super::Updater {
                 sapling,
                 orchard,
                 ironwood: crate::orchard::Bundle::serialize_from(bundle),
+                issue: Default::default(),
+                shielded_sighash: None,
             },
         })
     }

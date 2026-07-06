@@ -105,7 +105,6 @@ impl Creator {
             | BranchId::Nu6_1
             | BranchId::Nu6_2 => (V5_TX_VERSION, V5_VERSION_GROUP_ID),
             BranchId::Nu6_3 => (V6_TX_VERSION, V6_VERSION_GROUP_ID),
-            #[cfg(zcash_unstable = "nu7")]
             BranchId::Nu7 => (V6_TX_VERSION, V6_VERSION_GROUP_ID),
         };
 
@@ -173,7 +172,9 @@ impl Creator {
     /// the consensus branch ID passed to [`Creator::new`] does not carry an Ironwood
     /// bundle.
     pub fn with_ironwood_anchor(mut self, ironwood_anchor: [u8; 32]) -> Result<Self, Error> {
-        if self.tx_version != V6_TX_VERSION {
+        // Nu7 (ZSA) does not have an Ironwood pool — it is a separate hard fork
+        // from NU6.2 that uses an issue bundle instead.
+        if self.consensus_branch_id == BranchId::Nu7 || self.tx_version != V6_TX_VERSION {
             return Err(Error::IronwoodNotSupported);
         }
         self.ironwood_anchor = ironwood_anchor;
@@ -246,6 +247,8 @@ impl Creator {
                 anchor: self.ironwood_anchor,
                 ..crate::orchard::EMPTY_IRONWOOD
             },
+            issue: Default::default(),
+            shielded_sighash: None,
         }
     }
 
@@ -309,6 +312,15 @@ impl Creator {
                 .ironwood
                 .map(OrchardBundle::serialize_from)
                 .unwrap_or(crate::orchard::EMPTY_IRONWOOD),
+            issue: {
+                let mut issue = crate::issue::Bundle::default();
+                #[cfg(feature = "zsa")]
+                if let Some(zsa) = parts.issuance_builder {
+                    issue.ik = zsa.issuance_key().to_bytes();
+                }
+                issue
+            },
+            shielded_sighash: None,
         })
     }
 }

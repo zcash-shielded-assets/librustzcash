@@ -115,6 +115,7 @@ fn transparent_to_orchard() {
             Some(orchard_ovk),
             recipient,
             Zatoshis::const_from_u64(100_000),
+            #[cfg(feature = "zsa")] orchard::note::AssetBase::zatoshi(),
             MemoBytes::empty(),
         )
         .unwrap();
@@ -123,11 +124,12 @@ fn transparent_to_orchard() {
             Some(orchard_fvk.to_ovk(zip32::Scope::Internal)),
             orchard_fvk.address_at(0u32, orchard::keys::Scope::Internal),
             Zatoshis::const_from_u64(885_000),
+            #[cfg(feature = "zsa")] orchard::note::AssetBase::zatoshi(),
             MemoBytes::empty(),
         )
         .unwrap();
     let PcztResult { pczt_parts, .. } = builder
-        .build_for_pczt(rng, &zip317::FeeRule::standard())
+        .build_for_pczt(rng, &zip317::FeeRule::standard(), #[cfg(feature = "zsa")] |_| false)
         .unwrap();
 
     // Create the base PCZT.
@@ -280,6 +282,7 @@ fn transparent_p2sh_multisig_to_orchard() {
             Some(orchard_ovk),
             recipient,
             Zatoshis::const_from_u64(100_000),
+            #[cfg(feature = "zsa")] orchard::note::AssetBase::zatoshi(),
             MemoBytes::empty(),
         )
         .unwrap();
@@ -288,11 +291,12 @@ fn transparent_p2sh_multisig_to_orchard() {
             Some(orchard_fvk.to_ovk(zip32::Scope::Internal)),
             orchard_fvk.address_at(0u32, orchard::keys::Scope::Internal),
             Zatoshis::const_from_u64(880_000),
+            #[cfg(feature = "zsa")] orchard::note::AssetBase::zatoshi(),
             MemoBytes::empty(),
         )
         .unwrap();
     let PcztResult { pczt_parts, .. } = builder
-        .build_for_pczt(rng, &zip317::FeeRule::standard())
+        .build_for_pczt(rng, &zip317::FeeRule::standard(), #[cfg(feature = "zsa")] |_| false)
         .unwrap();
 
     // Create the base PCZT.
@@ -489,6 +493,7 @@ fn sapling_to_orchard() {
             Some(sapling_dfvk.to_ovk(zip32::Scope::External).0.into()),
             recipient,
             Zatoshis::const_from_u64(100_000),
+            #[cfg(feature = "zsa")] orchard::note::AssetBase::zatoshi(),
             MemoBytes::empty(),
         )
         .unwrap();
@@ -505,7 +510,7 @@ fn sapling_to_orchard() {
         sapling_meta,
         ..
     } = builder
-        .build_for_pczt(OsRng, &zip317::FeeRule::standard())
+        .build_for_pczt(OsRng, &zip317::FeeRule::standard(), #[cfg(feature = "zsa")] |_| false)
         .unwrap();
 
     // Create the base PCZT.
@@ -604,7 +609,7 @@ fn orchard_to_orchard() {
         )
         .unwrap();
         orchard_builder
-            .add_output(None, recipient, value, Memo::Empty.encode().into_bytes())
+            .add_output(None, recipient, value, orchard::note::AssetBase::zatoshi(), Memo::Empty.encode().into_bytes())
             .unwrap();
         let (bundle, meta) = orchard_builder.build::<i64>(&mut rng).unwrap().unwrap();
         let action = bundle
@@ -652,6 +657,7 @@ fn orchard_to_orchard() {
             Some(orchard_ovk),
             recipient,
             Zatoshis::const_from_u64(100_000),
+            #[cfg(feature = "zsa")] orchard::note::AssetBase::zatoshi(),
             MemoBytes::empty(),
         )
         .unwrap();
@@ -660,6 +666,7 @@ fn orchard_to_orchard() {
             Some(orchard_fvk.to_ovk(zip32::Scope::Internal)),
             orchard_fvk.address_at(0u32, orchard::keys::Scope::Internal),
             Zatoshis::const_from_u64(890_000),
+            #[cfg(feature = "zsa")] orchard::note::AssetBase::zatoshi(),
             MemoBytes::empty(),
         )
         .unwrap();
@@ -668,7 +675,7 @@ fn orchard_to_orchard() {
         orchard_meta,
         ..
     } = builder
-        .build_for_pczt(OsRng, &zip317::FeeRule::standard())
+        .build_for_pczt(OsRng, &zip317::FeeRule::standard(), #[cfg(feature = "zsa")] |_| false)
         .unwrap();
 
     // Create the base PCZT.

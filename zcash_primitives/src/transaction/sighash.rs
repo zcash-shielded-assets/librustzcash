@@ -50,6 +50,13 @@ pub fn signature_hash<
 
         TxVersion::V5 => v5_signature_hash(tx, signable_input, txid_parts),
 
-        TxVersion::V6 => v6_signature_hash(tx, signable_input, txid_parts),
+        TxVersion::V6 => {
+            use zcash_protocol::consensus::BranchId;
+            #[cfg(feature = "zsa")]
+            if tx.consensus_branch_id == BranchId::Nu7 {
+                return SignatureHash(crate::transaction::sighash_v6_zsa::zsa_v6_signature_hash(tx, signable_input, txid_parts));
+            }
+            v6_signature_hash(tx, signable_input, txid_parts)
+        }
     })
 }

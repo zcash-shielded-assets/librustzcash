@@ -11,7 +11,7 @@ impl super::Verifier {
             transparent,
             sapling,
             orchard,
-            ironwood,
+            ironwood, ..
         } = self.pczt;
 
         let bundle = sapling.into_parsed().map_err(SaplingError::Parser)?;
@@ -25,6 +25,8 @@ impl super::Verifier {
                 sapling: crate::sapling::Bundle::serialize_from(bundle),
                 orchard,
                 ironwood,
+                issue: Default::default(),
+                shielded_sighash: None,
             },
         })
     }

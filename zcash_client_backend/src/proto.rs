@@ -166,7 +166,7 @@ impl<Proof> From<&sapling::bundle::OutputDescription<Proof>>
         compact_formats::CompactSaplingOutput {
             cmu: out.cmu().to_bytes().to_vec(),
             ephemeral_key: out.ephemeral_key().as_ref().to_vec(),
-            ciphertext: out.enc_ciphertext()[..COMPACT_NOTE_SIZE].to_vec(),
+            ciphertext: out.enc_ciphertext().as_ref()[..COMPACT_NOTE_SIZE].to_vec(),
         }
     }
 }
@@ -275,7 +275,7 @@ impl<SpendAuth> From<&orchard::Action<SpendAuth>> for compact_formats::CompactOr
             nullifier: action.nullifier().to_bytes().to_vec(),
             cmx: action.cmx().to_bytes().to_vec(),
             ephemeral_key: action.encrypted_note().epk_bytes.to_vec(),
-            ciphertext: action.encrypted_note().enc_ciphertext[..COMPACT_NOTE_SIZE].to_vec(),
+            ciphertext: action.encrypted_note().enc_ciphertext.as_ref()[..COMPACT_NOTE_SIZE].to_vec(),
         }
     }
 }

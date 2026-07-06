@@ -11,7 +11,7 @@ impl super::Verifier {
             transparent,
             sapling,
             orchard,
-            ironwood,
+            ironwood, ..
         } = self.pczt;
 
         let bundle = orchard
@@ -30,6 +30,8 @@ impl super::Verifier {
                 sapling,
                 orchard: crate::orchard::Bundle::serialize_from(bundle),
                 ironwood,
+                issue: Default::default(),
+                shielded_sighash: None,
             },
         })
     }
@@ -44,7 +46,7 @@ impl super::Verifier {
             transparent,
             sapling,
             orchard,
-            ironwood,
+            ironwood, ..
         } = self.pczt;
 
         let bundle = ironwood
@@ -60,6 +62,8 @@ impl super::Verifier {
                 sapling,
                 orchard,
                 ironwood: crate::orchard::Bundle::serialize_from(bundle),
+                issue: Default::default(),
+                shielded_sighash: None,
             },
         })
     }

@@ -2786,7 +2786,7 @@ where
     fn to_sent_transaction_output<
         AccountId: Copy,
         D: Domain,
-        O: ShieldedOutput<D, { ENC_CIPHERTEXT_SIZE }>,
+        O: ShieldedOutput<D>,
         DbT: WalletRead + WalletCommitmentTrees,
         N,
     >(

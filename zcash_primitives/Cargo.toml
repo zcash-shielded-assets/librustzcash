@@ -94,7 +94,7 @@ zip32.workspace = true
 pprof = { version = "0.15", features = ["criterion", "flamegraph"] }
 
 [features]
-default = ["multicore", "std", "circuits"]
+default = ["multicore", "std", "circuits", "zsa"]
 std = [
     "document-features",
     "redjubjub/std",
@@ -106,6 +106,9 @@ zip-233 = []
 
 ## Enables creating proofs
 circuits = ["orchard/circuit", "sapling/circuit"]
+
+## Enables ZSA (Zcash Shielded Assets) support in Orchard.
+zsa = ["orchard/zsa"]
 
 ## Enables multithreading support for creating proofs.
 multicore = ["orchard/multicore", "sapling/multicore"]

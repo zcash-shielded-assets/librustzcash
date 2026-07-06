@@ -13,6 +13,7 @@ use ::sapling::{
     value::ValueCommitment,
 };
 use redjubjub::SpendAuth;
+use crate::encoding::{ReadBytesExt, WriteBytesExt};
 use zcash_encoding::{Array, CompactSize, Vector};
 use zcash_note_encryption::{ENC_CIPHERTEXT_SIZE, EphemeralKeyBytes, OUT_CIPHERTEXT_SIZE};
 use zcash_protocol::{
@@ -158,6 +159,31 @@ fn read_spend_auth_sig<R: Read>(mut reader: R) -> io::Result<redjubjub::Signatur
     Ok(redjubjub::Signature::from(sig))
 }
 
+// ── V6 versioned signature support ─────────────────────────────────────────
+
+/// Sighash info V0 for sapling spend authorization signatures in V6 transactions.
+pub(crate) const SAPLING_SIGHASH_INFO_V0: [u8; 1] = [0];
+
+fn read_versioned_signature<R: Read, T: redjubjub::SigType>(
+    mut reader: R,
+) -> io::Result<redjubjub::Signature<T>> {
+    let sighash_info_bytes = Vector::read(&mut reader, |r| r.read_u8())?;
+    if sighash_info_bytes != SAPLING_SIGHASH_INFO_V0 {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "invalid sighash V0"));
+    }
+    let mut signature_bytes = [0u8; 64];
+    reader.read_exact(&mut signature_bytes)?;
+    Ok(redjubjub::Signature::from(signature_bytes))
+}
+
+fn write_versioned_signature<W: Write, T: redjubjub::SigType>(
+    mut writer: W,
+    sig: &redjubjub::Signature<T>,
+) -> io::Result<()> {
+    Vector::write(&mut writer, &SAPLING_SIGHASH_INFO_V0, |w, b| w.write_u8(*b))?;
+    writer.write_all(&<[u8; 64]>::from(*sig))
+}
+
 #[cfg(feature = "temporary-zcashd")]
 pub fn temporary_zcashd_read_spend_v4<R: Read>(
     reader: R,
@@ -270,7 +296,7 @@ pub(crate) fn write_output_v4<W: Write>(
     writer.write_all(&output.cv().to_bytes())?;
     writer.write_all(output.cmu().to_bytes().as_ref())?;
     writer.write_all(output.ephemeral_key().as_ref())?;
-    writer.write_all(output.enc_ciphertext())?;
+    writer.write_all(output.enc_ciphertext().as_ref())?;
     writer.write_all(output.out_ciphertext())?;
     writer.write_all(output.zkproof())
 }
@@ -282,7 +308,7 @@ fn write_output_v5_without_proof<W: Write>(
     writer.write_all(&output.cv().to_bytes())?;
     writer.write_all(output.cmu().to_bytes().as_ref())?;
     writer.write_all(output.ephemeral_key().as_ref())?;
-    writer.write_all(output.enc_ciphertext())?;
+    writer.write_all(output.enc_ciphertext().as_ref())?;
     writer.write_all(output.out_ciphertext())
 }
 
@@ -488,6 +514,120 @@ pub(crate) fn write_v5_bundle<W: Write>(
 
         if !(bundle.shielded_spends().is_empty() && bundle.shielded_outputs().is_empty()) {
             writer.write_all(&<[u8; 64]>::from(bundle.authorization().binding_sig))?;
+        }
+    } else {
+        CompactSize::write(&mut writer, 0)?;
+        CompactSize::write(&mut writer, 0)?;
+    }
+
+    Ok(())
+}
+
+/// Reads a [`Bundle`] from a v6 transaction format.
+///
+/// V6 differs from V5 only in spend authorization and binding signatures,
+/// which are prefixed with versioned sighash info (`[0x01, 0x00]`).
+pub(crate) fn read_v6_bundle<R: Read>(
+    mut reader: R,
+) -> io::Result<Option<Bundle<Authorized, ZatBalance>>> {
+    let sd_v5s = Vector::read(&mut reader, read_spend_v5)?;
+    let od_v5s = Vector::read(&mut reader, read_output_v5)?;
+    let n_spends = sd_v5s.len();
+    let n_outputs = od_v5s.len();
+    let value_balance = if n_spends > 0 || n_outputs > 0 {
+        Transaction::read_amount(&mut reader)?
+    } else {
+        ZatBalance::zero()
+    };
+
+    let anchor = if n_spends > 0 {
+        Some(read_base(&mut reader, "anchor")?)
+    } else {
+        None
+    };
+
+    let v_spend_proofs = Array::read(&mut reader, n_spends, |r| read_zkproof(r))?;
+    let v_spend_auth_sigs = Array::read(&mut reader, n_spends, |r| {
+        read_versioned_signature::<_, redjubjub::SpendAuth>(r)
+    })?;
+    let v_output_proofs = Array::read(&mut reader, n_outputs, |r| read_zkproof(r))?;
+
+    let binding_sig = if n_spends > 0 || n_outputs > 0 {
+        Some(read_versioned_signature::<_, redjubjub::Binding>(&mut reader)?)
+    } else {
+        None
+    };
+
+    let shielded_spends = sd_v5s
+        .into_iter()
+        .zip(v_spend_proofs.into_iter().zip(v_spend_auth_sigs))
+        .map(|(sd_5, (zkproof, spend_auth_sig))| {
+            sd_5.into_spend_description(anchor.unwrap(), zkproof, spend_auth_sig)
+        })
+        .collect();
+
+    let shielded_outputs = od_v5s
+        .into_iter()
+        .zip(v_output_proofs)
+        .map(|(od_5, zkproof)| od_5.into_output_description(zkproof))
+        .collect();
+
+    Ok(binding_sig.and_then(|binding_sig| {
+        Bundle::from_parts(
+            shielded_spends,
+            shielded_outputs,
+            value_balance,
+            Authorized { binding_sig },
+        )
+    }))
+}
+
+/// Writes a [`Bundle`] in the v6 transaction format.
+///
+/// V6 differs from V5 only in spend authorization and binding signatures,
+/// which are prefixed with versioned sighash info (`[0x01, 0x00]`).
+pub(crate) fn write_v6_bundle<W: Write>(
+    mut writer: W,
+    sapling_bundle: Option<&Bundle<Authorized, ZatBalance>>,
+) -> io::Result<()> {
+    if let Some(bundle) = sapling_bundle {
+        Vector::write(&mut writer, bundle.shielded_spends(), |w, e| {
+            write_spend_v5_without_witness_data(w, e)
+        })?;
+
+        Vector::write(&mut writer, bundle.shielded_outputs(), |w, e| {
+            write_output_v5_without_proof(w, e)
+        })?;
+
+        if !(bundle.shielded_spends().is_empty() && bundle.shielded_outputs().is_empty()) {
+            writer.write_all(&bundle.value_balance().to_i64_le_bytes())?;
+        }
+        if !bundle.shielded_spends().is_empty() {
+            writer.write_all(bundle.shielded_spends()[0].anchor().to_repr().as_ref())?;
+        }
+
+        Array::write(
+            &mut writer,
+            bundle.shielded_spends().iter().map(|s| &s.zkproof()[..]),
+            |w, e| w.write_all(e),
+        )?;
+        Array::write(
+            &mut writer,
+            bundle.shielded_spends().iter().map(|s| s.spend_auth_sig()),
+            |w, e| write_versioned_signature::<_, redjubjub::SpendAuth>(w, e),
+        )?;
+
+        Array::write(
+            &mut writer,
+            bundle.shielded_outputs().iter().map(|s| &s.zkproof()[..]),
+            |w, e| w.write_all(e),
+        )?;
+
+        if !(bundle.shielded_spends().is_empty() && bundle.shielded_outputs().is_empty()) {
+            write_versioned_signature::<_, redjubjub::Binding>(
+                &mut writer,
+                &bundle.authorization().binding_sig,
+            )?;
         }
     } else {
         CompactSize::write(&mut writer, 0)?;

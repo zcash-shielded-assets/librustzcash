@@ -40,6 +40,8 @@ pub struct Signer {
     orchard: orchard::pczt::Bundle,
     ironwood: orchard::pczt::Bundle,
     empty_ironwood: Option<crate::orchard::Bundle>,
+    /// The issue bundle from the PCZT, preserved for `finish()`.
+    issue: crate::issue::Bundle,
     /// Cached across multiple signatures.
     tx_data: TransactionData<EffectsOnly>,
     txid_parts: TxDigests<Blake2bHash>,
@@ -62,6 +64,7 @@ impl Signer {
             sapling,
             orchard,
             ironwood,
+            issue,
             tx_data,
         } = pczt.extract_tx_data(
             |t| {
@@ -71,6 +74,8 @@ impl Signer {
             |s| s.extract_effects().map_err(ExtractError::SaplingExtract),
             |o| o.extract_effects().map_err(ExtractError::OrchardExtract),
             |i| i.extract_effects().map_err(ExtractError::IronwoodExtract),
+            #[cfg(feature = "issuer")]
+            |issue| Ok(issue.to_effects()),
         )?;
         let txid_parts = tx_data.digest(TxIdDigester);
         let shielded_sighash = sighash(&tx_data, &SignableInput::Shielded, &txid_parts);
@@ -82,6 +87,7 @@ impl Signer {
             orchard,
             ironwood,
             empty_ironwood,
+            issue,
             tx_data,
             txid_parts,
             shielded_sighash,
@@ -417,9 +423,10 @@ impl Signer {
             orchard,
             ironwood,
             empty_ironwood,
+            issue,
             tx_data: _,
             txid_parts: _,
-            shielded_sighash: _,
+            shielded_sighash,
             secp: _,
         } = self;
 
@@ -430,6 +437,8 @@ impl Signer {
             orchard: crate::orchard::Bundle::serialize_from(orchard),
             ironwood: empty_ironwood
                 .unwrap_or_else(|| crate::orchard::Bundle::serialize_from(ironwood)),
+            issue,
+            shielded_sighash: Some(shielded_sighash),
         }
     }
 }

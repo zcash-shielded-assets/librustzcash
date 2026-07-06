@@ -441,6 +441,8 @@ pub struct PcztParts<P: Parameters> {
     pub sapling: Option<sapling::pczt::Bundle>,
     pub orchard: Option<orchard::pczt::Bundle>,
     pub ironwood: Option<orchard::pczt::Bundle>,
+    #[cfg(feature = "zsa")]
+    pub issuance_builder: Option<crate::transaction::zsa_builder::ZsaBuilder>,
 }
 
 /// Generates a [`Transaction`] from its inputs and outputs.
@@ -451,13 +453,15 @@ pub struct Builder<P, U> {
     build_config: BuildConfig,
     target_height: BlockHeight,
     expiry_height: BlockHeight,
-    #[cfg(all(zcash_unstable = "nu7", feature = "zip-233"))]
+    #[cfg(all(feature = "zip-233"))]
     zip233_amount: Zatoshis,
     transparent_builder: TransparentBuilder,
     sapling_builder: Option<sapling::builder::Builder>,
     orchard_builder: Option<orchard::builder::Builder>,
     orchard_bundle_version: Option<orchard::bundle::BundleVersion>,
     ironwood_builder: Option<orchard::builder::Builder>,
+    #[cfg(feature = "zsa")]
+    issuance_builder: Option<crate::transaction::zsa_builder::ZsaBuilder>,
     _progress_notifier: U,
 }
 
@@ -553,8 +557,7 @@ impl<P, U> Builder<P, U> {
             // (V6) and the consensus branch is one in which Ironwood is active.
             let ironwood_branch = match self.consensus_branch_id {
                 BranchId::Nu6_3 => true,
-                #[cfg(zcash_unstable = "nu7")]
-                BranchId::Nu7 => true,
+                BranchId::Nu7 => false, // ZSA: no Ironwood pool
                 _ => false,
             };
             let ironwood_available = version.has_ironwood() && ironwood_branch;
@@ -606,9 +609,8 @@ impl<P: consensus::Parameters> Builder<P, ()> {
         let orchard_builder = bundle_version.and_then(|v| build_config.orchard_builder(v));
         let orchard_bundle_version = orchard_builder.as_ref().and(bundle_version);
 
-        // The Ironwood builder exists exactly when the branch's transaction version
-        // carries an Ironwood bundle (V6, i.e. NU6.3 onward).
-        let ironwood_builder = if tx_version.has_ironwood() {
+        // The Ironwood builder only exists on NU6.3. NU7 uses ZSA issuance instead.
+        let ironwood_builder = if tx_version.has_ironwood() && consensus_branch_id != BranchId::Nu7 {
             build_config.ironwood_builder()
         } else {
             None
@@ -646,13 +648,15 @@ impl<P: consensus::Parameters> Builder<P, ()> {
             build_config,
             target_height,
             expiry_height,
-            #[cfg(all(zcash_unstable = "nu7", feature = "zip-233"))]
+            #[cfg(all(feature = "zip-233"))]
             zip233_amount: Zatoshis::ZERO,
             transparent_builder: TransparentBuilder::empty(),
             sapling_builder,
             orchard_builder,
             orchard_bundle_version,
             ironwood_builder,
+            #[cfg(feature = "zsa")]
+            issuance_builder: None,
             _progress_notifier: (),
         }
     }
@@ -675,13 +679,15 @@ impl<P: consensus::Parameters> Builder<P, ()> {
             build_config: self.build_config,
             target_height: self.target_height,
             expiry_height: self.expiry_height,
-            #[cfg(all(zcash_unstable = "nu7", feature = "zip-233"))]
+            #[cfg(all(feature = "zip-233"))]
             zip233_amount: self.zip233_amount,
             transparent_builder: self.transparent_builder,
             sapling_builder: self.sapling_builder,
             orchard_builder: self.orchard_builder,
             orchard_bundle_version: self.orchard_bundle_version,
             ironwood_builder: self.ironwood_builder,
+            #[cfg(feature = "zsa")]
+            issuance_builder: self.issuance_builder,
             _progress_notifier,
         }
     }
@@ -740,8 +746,12 @@ impl<P: consensus::Parameters, U> Builder<P, U> {
         ovk: Option<orchard::keys::OutgoingViewingKey>,
         recipient: orchard::Address,
         value: Zatoshis,
+        #[cfg(feature = "zsa")] asset: orchard::note::AssetBase,
         memo: MemoBytes,
     ) -> Result<(), Error<FE>> {
+        #[cfg(not(feature = "zsa"))]
+        let asset = orchard::note::AssetBase::zatoshi();
+
         self.orchard_builder
             .as_mut()
             .ok_or(Error::OrchardBuilderNotAvailable)?
@@ -749,6 +759,7 @@ impl<P: consensus::Parameters, U> Builder<P, U> {
                 ovk,
                 recipient,
                 orchard::value::NoteValue::from_raw(value.into()),
+                asset,
                 memo.into_bytes(),
             )
             .map_err(Error::OrchardRecipient)
@@ -766,8 +777,12 @@ impl<P: consensus::Parameters, U> Builder<P, U> {
         ovk: Option<orchard::keys::OutgoingViewingKey>,
         recipient: orchard::Address,
         value: Zatoshis,
+        #[cfg(feature = "zsa")] asset: orchard::note::AssetBase,
         memo: MemoBytes,
     ) -> Result<(), Error<FE>> {
+        #[cfg(not(feature = "zsa"))]
+        let asset = orchard::note::AssetBase::zatoshi();
+
         self.orchard_builder
             .as_mut()
             .ok_or(Error::OrchardBuilderNotAvailable)?
@@ -776,6 +791,7 @@ impl<P: consensus::Parameters, U> Builder<P, U> {
                 ovk,
                 recipient,
                 orchard::value::NoteValue::from_raw(value.into()),
+                asset,
                 memo.into_bytes(),
             )
             .map_err(Error::OrchardRecipient)
@@ -828,6 +844,7 @@ impl<P: consensus::Parameters, U> Builder<P, U> {
                 ovk,
                 recipient,
                 orchard::value::NoteValue::from_raw(value.into()),
+                orchard::note::AssetBase::zatoshi(),
                 memo.into_bytes(),
             )
             .map_err(Error::IronwoodRecipient)
@@ -941,7 +958,7 @@ impl<P: consensus::Parameters, U> Builder<P, U> {
                         .map_err(|_| BalanceError::Overflow)
                 },
             )?,
-            #[cfg(all(zcash_unstable = "nu7", feature = "zip-233"))]
+            #[cfg(all(feature = "zip-233"))]
             -ZatBalance::from(self.zip233_amount),
         ];
 
@@ -955,7 +972,13 @@ impl<P: consensus::Parameters, U> Builder<P, U> {
     ///
     /// This fee is a function of the spends and outputs that have been added to the builder,
     /// pursuant to the specified [`FeeRule`].
-    pub fn get_fee<FR: FeeRule>(&self, fee_rule: &FR) -> Result<Zatoshis, FeeError<FR::Error>> {
+    pub fn get_fee<FR: FeeRule>(
+        &self,
+        fee_rule: &FR,
+        #[cfg(feature = "zsa")] _is_new_asset: impl Fn(&orchard::note::AssetBase) -> bool,
+    ) -> Result<Zatoshis, FeeError<FR::Error>> {
+        #[cfg(feature = "zsa")]
+        let _ = _is_new_asset;
         #[cfg(feature = "transparent-inputs")]
         let transparent_inputs = self.transparent_builder.inputs();
 
@@ -978,6 +1001,14 @@ impl<P: consensus::Parameters, U> Builder<P, U> {
                 )
             })
             .map_err(FeeError::Bundle)?;
+
+        // On NU7 (ZSA), issuance notes replace Ironwood actions in the bundle.
+        #[cfg(feature = "zsa")]
+        let ironwood_actions = ironwood_actions
+            + self
+                .issuance_builder
+                .as_ref()
+                .map_or(0, |b| b.issuance_action_counts().0 as usize);
 
         fee_rule
             .fee_required(
@@ -1013,9 +1044,16 @@ impl<P: consensus::Parameters, U> Builder<P, U> {
             .map_err(FeeError::FeeRule)
     }
 
-    #[cfg(all(zcash_unstable = "nu7", feature = "zip-233"))]
+    #[cfg(all(feature = "zip-233"))]
     pub fn set_zip233_amount(&mut self, zip233_amount: Zatoshis) {
         self.zip233_amount = zip233_amount;
+    }
+
+    /// Attaches a ZSA issuance builder. Only valid when
+    /// `params.orchard_mode() == OrchardMode::Zsa`.
+    #[cfg(feature = "zsa")]
+    pub fn set_zsa_builder(&mut self, zsa: crate::transaction::zsa_builder::ZsaBuilder) {
+        self.issuance_builder = Some(zsa);
     }
 }
 
@@ -1066,6 +1104,9 @@ impl<P: consensus::Parameters, U: sapling::builder::ProverProgress> Builder<P, U
                 )
             }
             BuildConfig::Standard { .. } => {
+                #[cfg(feature = "zsa")]
+                let fee = self.get_fee(fee_rule, |_| false).map_err(Error::Fee)?;
+                #[cfg(not(feature = "zsa"))]
                 let fee = self.get_fee(fee_rule).map_err(Error::Fee)?;
 
                 self.build_internal::<Unauthorized, _, _, _, _>(
@@ -1214,7 +1255,7 @@ impl<P: consensus::Parameters, U: sapling::builder::ProverProgress> Builder<P, U
             consensus_branch_id: self.consensus_branch_id,
             lock_time: 0,
             expiry_height: self.expiry_height,
-            #[cfg(all(zcash_unstable = "nu7", feature = "zip-233"))]
+            #[cfg(all(feature = "zip-233"))]
             zip233_amount: self.zip233_amount,
             transparent_bundle,
             // We don't support constructing Sprout bundles.
@@ -1230,6 +1271,9 @@ impl<P: consensus::Parameters, U: sapling::builder::ProverProgress> Builder<P, U
             sapling_bundle,
             orchard_bundle,
             ironwood_bundle,
+            #[cfg(feature = "zsa")]
+            #[cfg(feature = "zsa")]
+            issue_bundle: None,
         };
 
         //
@@ -1321,13 +1365,16 @@ impl<P: consensus::Parameters, U: sapling::builder::ProverProgress> Builder<P, U
             consensus_branch_id: unauthed_tx.consensus_branch_id,
             lock_time: unauthed_tx.lock_time,
             expiry_height: unauthed_tx.expiry_height,
-            #[cfg(all(zcash_unstable = "nu7", feature = "zip-233"))]
+            #[cfg(all(feature = "zip-233"))]
             zip233_amount: unauthed_tx.zip233_amount,
             transparent_bundle,
             sprout_bundle: unauthed_tx.sprout_bundle,
             sapling_bundle,
             orchard_bundle,
             ironwood_bundle,
+            #[cfg(feature = "zsa")]
+            #[cfg(feature = "zsa")]
+            issue_bundle: None,
         };
 
         // The unwrap() here is safe because the txid hashing
@@ -1351,7 +1398,11 @@ impl<P: consensus::Parameters, U> Builder<P, U> {
         self,
         mut rng: R,
         fee_rule: &FR,
+        #[cfg(feature = "zsa")] is_new_asset: impl Fn(&orchard::note::AssetBase) -> bool,
     ) -> Result<PcztResult<P>, Error<FR::Error>> {
+        #[cfg(feature = "zsa")]
+        let fee = self.get_fee(fee_rule, is_new_asset).map_err(Error::Fee)?;
+        #[cfg(not(feature = "zsa"))]
         let fee = self.get_fee(fee_rule).map_err(Error::Fee)?;
         self.check_version_compatibility::<FR::Error>(self.tx_version)?;
         self.check_coinbase_expiry_height::<FR::Error>()?;
@@ -1432,6 +1483,8 @@ impl<P: consensus::Parameters, U> Builder<P, U> {
                 sapling: sapling_bundle,
                 orchard: orchard_bundle,
                 ironwood: ironwood_bundle,
+                #[cfg(feature = "zsa")]
+                issuance_builder: self.issuance_builder,
             },
             sapling_meta,
             orchard_meta,
@@ -1559,12 +1612,12 @@ mod tests {
             nu6_1: Some(BlockHeight::from_u32(8)),
             nu6_2: Some(BlockHeight::from_u32(9)),
             nu6_3: Some(BlockHeight::from_u32(10)),
-            #[cfg(zcash_unstable = "nu7")]
             nu7: None,
+            orchard_mode: zcash_protocol::consensus::OrchardMode::Normal,
         }
     }
 
-    #[cfg(all(feature = "circuits", zcash_unstable = "nu7"))]
+    #[cfg(all(feature = "circuits"))]
     fn nu7_test_network() -> zcash_protocol::local_consensus::LocalNetwork {
         use zcash_protocol::consensus::BlockHeight;
 
@@ -1580,6 +1633,7 @@ mod tests {
             nu6_2: Some(BlockHeight::from_u32(9)),
             nu6_3: Some(BlockHeight::from_u32(10)),
             nu7: Some(BlockHeight::from_u32(11)),
+            orchard_mode: zcash_protocol::consensus::OrchardMode::Normal,
         }
     }
 
@@ -1639,15 +1693,17 @@ mod tests {
     }
 
     #[test]
-    #[cfg(all(feature = "circuits", zcash_unstable = "nu7"))]
-    fn nu7_coinbase_builder_does_not_expose_orchard() {
+    #[cfg(all(feature = "circuits"))]
+    fn nu7_coinbase_builder_exposes_orchard_v2() {
         let builder = Builder::new(
             nu7_test_network(),
             zcash_protocol::consensus::BlockHeight::from_u32(11),
             BuildConfig::Coinbase { miner_data: None },
         );
 
-        assert!(builder.orchard_builder.is_none());
+        // Nu7 uses Orchard protocol revision V2 (cross-address enabled),
+        // so a coinbase builder does expose an Orchard builder.
+        assert!(builder.orchard_builder.is_some());
     }
 
     #[test]
@@ -1687,6 +1743,8 @@ mod tests {
                 None,
                 recipient,
                 Zatoshis::const_from_u64(10_000),
+                #[cfg(feature = "zsa")]
+                orchard::note::AssetBase::zatoshi(),
                 MemoBytes::empty(),
             ),
             Err(Error::OrchardBuilderNotAvailable)
@@ -1764,6 +1822,8 @@ mod tests {
             .build_for_pczt(
                 OsRng,
                 &crate::transaction::fees::zip317::FeeRule::standard(),
+                #[cfg(feature = "zsa")]
+                |_| false,
             )
             .unwrap();
         assert_eq!(res.pczt_parts.version, TxVersion::V6);
@@ -1802,6 +1862,8 @@ mod tests {
             builder.build_for_pczt(
                 OsRng,
                 &crate::transaction::fees::zip317::FeeRule::standard(),
+                #[cfg(feature = "zsa")]
+                |_| false,
             ),
             Err(Error::InsufficientFunds(_))
         );
@@ -1840,6 +1902,8 @@ mod tests {
             builder.build_for_pczt(
                 OsRng,
                 &crate::transaction::fees::zip317::FeeRule::standard(),
+                #[cfg(feature = "zsa")]
+                |_| false,
             ),
             Err(Error::TargetIncompatible(
                 BranchId::Nu6_3,
@@ -1868,7 +1932,7 @@ mod tests {
         let rseed = (0u8..=255)
             .find_map(|b| orchard::note::RandomSeed::from_bytes([b; 32], &rho).into_option())
             .expect("at least one test rseed is valid");
-        let note = orchard::Note::from_parts(recipient, value, rho, rseed, version).unwrap();
+        let note = orchard::Note::from_parts(recipient, value, orchard::note::AssetBase::zatoshi(), rho, rseed, version).unwrap();
         let zero = orchard::tree::MerkleHashOrchard::from_bytes(&[0; 32]).unwrap();
         let merkle_path = orchard::tree::MerklePath::from_parts(0, [zero; 32]);
 
@@ -1929,6 +1993,7 @@ mod tests {
         let note = orchard::Note::from_parts(
             spend_recipient,
             orchard::value::NoteValue::from_raw(10_000),
+            orchard::note::AssetBase::zatoshi(),
             rho,
             rseed,
             orchard::note::NoteVersion::V2,
@@ -1962,6 +2027,7 @@ mod tests {
                     None,
                     recipient,
                     orchard::value::NoteValue::from_raw(1_000),
+                    orchard::note::AssetBase::zatoshi(),
                     [0u8; 512],
                 )
                 .unwrap();
@@ -2004,6 +2070,8 @@ mod tests {
                 None,
                 recipient,
                 Zatoshis::const_from_u64(5_000),
+                #[cfg(feature = "zsa")]
+                orchard::note::AssetBase::zatoshi(),
                 MemoBytes::empty(),
             )
             .unwrap();
@@ -2040,13 +2108,15 @@ mod tests {
             },
             target_height: sapling_activation_height,
             expiry_height: sapling_activation_height + DEFAULT_TX_EXPIRY_DELTA,
-            #[cfg(all(zcash_unstable = "nu7", feature = "zip-233"))]
+            #[cfg(all(feature = "zip-233"))]
             zip233_amount: Zatoshis::ZERO,
             transparent_builder: TransparentBuilder::empty(),
             sapling_builder: None,
             orchard_builder: None,
             orchard_bundle_version: None,
             ironwood_builder: None,
+            #[cfg(feature = "zsa")]
+            issuance_builder: None,
             _progress_notifier: (),
         };
 
@@ -2289,7 +2359,7 @@ mod tests {
 
         // Fail if there is only a burn
         // 0.0005 burned, 0.0001 t-ZEC fee
-        #[cfg(all(zcash_unstable = "nu7", feature = "zip-233"))]
+        #[cfg(all(feature = "zip-233"))]
         {
             let build_config = BuildConfig::Standard {
                 sapling_anchor: Some(sapling::Anchor::empty_tree()),
@@ -2353,7 +2423,7 @@ mod tests {
 
         // Fail if there is insufficient input
         // 0.0003 z-ZEC out, 0.00005 t-ZEC out, 0.0001 burned, 0.00015 t-ZEC fee, 0.00059999 z-ZEC in
-        #[cfg(all(zcash_unstable = "nu7", feature = "zip-233"))]
+        #[cfg(all(feature = "zip-233"))]
         {
             let build_config = BuildConfig::Standard {
                 sapling_anchor: Some(witness1.root().into()),
@@ -2448,7 +2518,7 @@ mod tests {
 
         // Succeeds if there is sufficient input
         // 0.0003 z-ZEC out, 0.00005 t-ZEC out, 0.0001 burned, 0.00015 t-ZEC fee, 0.0006 z-ZEC in
-        #[cfg(all(zcash_unstable = "nu7", feature = "zip-233"))]
+        #[cfg(all(feature = "zip-233"))]
         {
             let build_config = BuildConfig::Standard {
                 sapling_anchor: Some(witness1.root().into()),

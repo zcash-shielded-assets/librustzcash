@@ -77,6 +77,18 @@ impl<'a> TransactionExtractor<'a> {
             _unused,
         } = self;
 
+        // Save the signed issue bundle before extraction (Nu7/ZSA).
+        // The Issuer Phase 2 should have already signed it.
+        #[cfg(feature = "issuer")]
+        let saved_signed_issue = pczt.issue.to_signed();
+        #[cfg(feature = "issuer")]
+        let stored_sighash = pczt.shielded_sighash;
+        #[cfg(feature = "issuer")]
+        let consensus_branch_id =
+            zcash_protocol::consensus::BranchId::try_from(pczt.global.consensus_branch_id)
+                .map_err(|_| crate::ExtractError::UnknownConsensusBranchId)
+                .map_err(Error::Extract)?;
+
         let crate::ParsedPczt { tx_data, .. } = pczt.extract_tx_data::<Unbound, Error>(
             |t| {
                 t.extract()
@@ -94,13 +106,61 @@ impl<'a> TransactionExtractor<'a> {
                 i.extract()
                     .map_err(|e| Error::Ironwood(IronwoodError::Extract(e)))
             },
+            #[cfg(feature = "issuer")]
+            |issue| Ok(issue.to_effects()),
         )?;
 
         // The commitment being signed is shared across all shielded inputs.
         let txid_parts = tx_data.digest(TxIdDigester);
         let shielded_sighash = signature_hash(&tx_data, &SignableInput::Shielded, &txid_parts);
 
+        #[cfg(feature = "issuer")]
+        let sighash_bytes: [u8; 32] = stored_sighash
+            .unwrap_or(*shielded_sighash.as_ref());
+
         // Create the binding signatures.
+        #[cfg(feature = "issuer")]
+        let tx_data = if consensus_branch_id == zcash_protocol::consensus::BranchId::Nu7 {
+            // ZSA (Nu7): preserve the signed issue bundle through binding
+            // signature application.
+            tx_data.try_map_bundles_zsa(
+                |t| Ok(t.map(|t| t.map_authorization(transparent::RemoveInputInfo))),
+                |s| {
+                    s.map(|s| {
+                        s.apply_binding_signature(sighash_bytes, OsRng)
+                            .ok_or(Error::SighashMismatch)
+                    })
+                    .transpose()
+                },
+                |o| {
+                    o.map(|o| {
+                        o.apply_binding_signature(sighash_bytes, OsRng)
+                            .ok_or(Error::SighashMismatch)
+                    })
+                    .transpose()
+                },
+                |_issue| Ok(saved_signed_issue),
+            )?
+        } else {
+            tx_data.try_map_bundles(
+                |t| Ok(t.map(|t| t.map_authorization(transparent::RemoveInputInfo))),
+                |s| {
+                    s.map(|s| {
+                        s.apply_binding_signature(sighash_bytes, OsRng)
+                            .ok_or(Error::SighashMismatch)
+                    })
+                    .transpose()
+                },
+                |o| {
+                    o.map(|o| {
+                        o.apply_binding_signature(sighash_bytes, OsRng)
+                            .ok_or(Error::SighashMismatch)
+                    })
+                    .transpose()
+                },
+            )?
+        };
+        #[cfg(not(feature = "issuer"))]
         let tx_data = tx_data.try_map_bundles(
             |t| Ok(t.map(|t| t.map_authorization(transparent::RemoveInputInfo))),
             |s| {
@@ -147,6 +207,7 @@ impl Authorization for Unbound {
     type TransparentAuth = ::transparent::pczt::Unbound;
     type SaplingAuth = ::sapling::pczt::Unbound;
     type OrchardAuth = ::orchard::pczt::Unbound;
+    type IssueAuth = ::orchard::issuance::EffectsOnly;
 }
 
 /// Errors that can occur while extracting a transaction from a PCZT.

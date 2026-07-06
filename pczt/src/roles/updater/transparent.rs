@@ -13,7 +13,7 @@ impl super::Updater {
             transparent,
             sapling,
             orchard,
-            ironwood,
+            ironwood, ..
         } = self.pczt;
 
         let mut bundle = transparent
@@ -29,6 +29,8 @@ impl super::Updater {
                 sapling,
                 orchard,
                 ironwood,
+                issue: Default::default(),
+                shielded_sighash: None,
             },
         })
     }

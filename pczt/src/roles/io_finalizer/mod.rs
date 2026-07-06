@@ -51,6 +51,7 @@ impl IoFinalizer {
             mut sapling,
             mut orchard,
             mut ironwood,
+            issue,
             tx_data,
         } = pczt.extract_tx_data(
             |t| {
@@ -60,6 +61,8 @@ impl IoFinalizer {
             |s| s.extract_effects().map_err(ExtractError::SaplingExtract),
             |o| o.extract_effects().map_err(ExtractError::OrchardExtract),
             |i| i.extract_effects().map_err(ExtractError::IronwoodExtract),
+            #[cfg(feature = "issuer")]
+            |issue| Ok(issue.to_effects()),
         )?;
 
         // After shielded IO finalization, the transaction effects cannot be modified
@@ -99,6 +102,8 @@ impl IoFinalizer {
             sapling: crate::sapling::Bundle::serialize_from(sapling),
             orchard: crate::orchard::Bundle::serialize_from(orchard),
             ironwood: crate::orchard::Bundle::serialize_from(ironwood),
+            issue,
+            shielded_sighash: Some(shielded_sighash),
         })
     }
 }
