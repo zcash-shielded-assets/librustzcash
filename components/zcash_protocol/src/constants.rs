@@ -39,6 +39,6 @@ pub const V5_VERSION_GROUP_ID: u32 = 0x26A7270A;
 /// Transaction version 6, specified in [ZIP 229](https://zips.z.cash/zip-0229).
 pub const V6_TX_VERSION: u32 = 6;
 /// The version group ID for Ironwood (NU6.3) v6 transactions.
-pub const V6_VERSION_GROUP_ID: u32 = 0x26A7270B;
+pub const V6_VERSION_GROUP_ID: u32 = 0xD884B698;
 /// The version group ID for ZSA (NU7) v6 transactions.
 pub const ZSA_V6_VERSION_GROUP_ID: u32 = 0x77777777;

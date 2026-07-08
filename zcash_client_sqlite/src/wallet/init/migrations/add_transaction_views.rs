@@ -418,7 +418,7 @@ mod tests {
             BranchId::Canopy,
             0,
             BlockHeight::from(3),
-            #[cfg(all(zcash_unstable = "nu7", feature = "zip-233"))]
+            #[cfg(feature = "zip-233")]
             Zatoshis::ZERO,
             Some(transparent::Bundle {
                 vin: vec![TxIn::from_parts(OutPoint::fake(), Script::default(), 0)],

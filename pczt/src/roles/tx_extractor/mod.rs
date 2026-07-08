@@ -111,7 +111,6 @@ impl<'a> TransactionExtractor<'a> {
         // The commitment being signed is shared across all shielded inputs.
         let txid_parts = tx_data.digest(TxIdDigester);
         let shielded_sighash = signature_hash(&tx_data, &SignableInput::Shielded, &txid_parts);
-
         // Create the binding signatures.
         #[cfg(feature = "zsa")]
         let tx_data = if consensus_branch_id == zcash_protocol::consensus::BranchId::Nu7 {

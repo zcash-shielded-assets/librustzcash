@@ -524,7 +524,7 @@ impl Pczt {
                     consensus_branch_id,
                     lock_time,
                     global.expiry_height.into(),
-                    #[cfg(all(feature = "zip-233"))]
+                    #[cfg(feature = "zip-233")]
                     Zatoshis::ZERO,
                     transparent_bundle,
                     sapling_bundle,
@@ -536,7 +536,7 @@ impl Pczt {
                 consensus_branch_id,
                 lock_time,
                 global.expiry_height.into(),
-                #[cfg(all(feature = "zip-233"))]
+                #[cfg(feature = "zip-233")]
                 Zatoshis::ZERO,
                 transparent_bundle,
                 sapling_bundle,
@@ -548,7 +548,7 @@ impl Pczt {
                 consensus_branch_id,
                 lock_time,
                 global.expiry_height.into(),
-                #[cfg(all(feature = "zip-233"))]
+                #[cfg(feature = "zip-233")]
                 Zatoshis::ZERO,
                 transparent_bundle,
                 None,
