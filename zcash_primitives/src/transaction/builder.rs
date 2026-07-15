@@ -935,37 +935,48 @@ impl<P: consensus::Parameters, U> Builder<P, U> {
 
     /// Returns the sum of the transparent, Sapling, Orchard, and zip233_amount value balances.
     fn value_balance(&self) -> Result<ZatBalance, BalanceError> {
+        let t_balance = self.transparent_builder.value_balance()?;
+        let s_balance = self
+            .sapling_builder
+            .as_ref()
+            .map_or_else(ZatBalance::zero, |builder| {
+                builder.value_balance::<ZatBalance>()
+            });
+        let o_balance = self.orchard_builder.as_ref().map_or_else(
+            || Ok(ZatBalance::zero()),
+            |builder| {
+                builder
+                    .value_balance::<ZatBalance>()
+                    .map_err(|_| BalanceError::Overflow)
+            },
+        )?;
+        let i_balance = self.ironwood_builder.as_ref().map_or_else(
+            || Ok(ZatBalance::zero()),
+            |builder| {
+                builder
+                    .value_balance::<ZatBalance>()
+                    .map_err(|_| BalanceError::Overflow)
+            },
+        )?;
+        #[cfg(feature = "zip-233")]
+        let zip233_amount = -ZatBalance::from(self.zip233_amount);
+        #[cfg(not(feature = "zip-233"))]
+        let zip233_amount = ZatBalance::zero();
+
         let value_balances = [
-            self.transparent_builder.value_balance()?,
-            self.sapling_builder
-                .as_ref()
-                .map_or_else(ZatBalance::zero, |builder| {
-                    builder.value_balance::<ZatBalance>()
-                }),
-            self.orchard_builder.as_ref().map_or_else(
-                || Ok(ZatBalance::zero()),
-                |builder| {
-                    builder
-                        .value_balance::<ZatBalance>()
-                        .map_err(|_| BalanceError::Overflow)
-                },
-            )?,
-            self.ironwood_builder.as_ref().map_or_else(
-                || Ok(ZatBalance::zero()),
-                |builder| {
-                    builder
-                        .value_balance::<ZatBalance>()
-                        .map_err(|_| BalanceError::Overflow)
-                },
-            )?,
-            #[cfg(feature = "zip-233")]
-            -ZatBalance::from(self.zip233_amount),
+            t_balance,
+            s_balance,
+            o_balance,
+            i_balance,
+            zip233_amount,
         ];
 
-        value_balances
+        let total = value_balances
             .into_iter()
             .sum::<Option<_>>()
-            .ok_or(BalanceError::Overflow)
+            .ok_or(BalanceError::Overflow)?;
+
+        Ok(total)
     }
 
     /// Reports the calculated fee given the specified fee rule.
@@ -981,6 +992,7 @@ impl<P: consensus::Parameters, U> Builder<P, U> {
         let _ = _is_new_asset;
         #[cfg(feature = "transparent-inputs")]
         let transparent_inputs = self.transparent_builder.inputs();
+        let transparent_outputs = self.transparent_builder.outputs();
 
         #[cfg(not(feature = "transparent-inputs"))]
         let transparent_inputs: &[Infallible] = &[];
@@ -989,6 +1001,29 @@ impl<P: consensus::Parameters, U> Builder<P, U> {
             .sapling_builder
             .as_ref()
             .map_or(0, |builder| builder.inputs().len());
+
+        let sapling_outputs = self
+            .sapling_builder
+            .as_ref()
+            .zip(self.build_config.sapling_builder_config())
+            .map_or(Ok(0), |(builder, (bundle_type, _))| {
+                bundle_type
+                    .num_outputs(sapling_spends, builder.outputs().len())
+                    .map_err(FeeError::Bundle)
+            })?;
+
+        let orchard_actions = self
+            .orchard_builder
+            .as_ref()
+            .map_or(Ok(0), |builder| {
+                orchard_action_count(
+                    builder,
+                    self.build_config.is_coinbase(),
+                    self.orchard_bundle_version
+                        .expect("orchard builder present implies bundle version"),
+                )
+            })
+            .map_err(FeeError::Bundle)?;
 
         let ironwood_actions = self
             .ironwood_builder
@@ -1012,38 +1047,20 @@ impl<P: consensus::Parameters, U> Builder<P, U> {
         #[cfg(not(feature = "zsa"))]
         let issue_actions = 0usize;
 
-        fee_rule
+        let fee = fee_rule
             .fee_required(
                 &self.params,
                 self.target_height,
                 transparent_inputs.iter().map(|i| i.serialized_size()),
-                self.transparent_builder
-                    .outputs()
-                    .iter()
-                    .map(|i| i.serialized_size()),
+                transparent_outputs.iter().map(|i| i.serialized_size()),
                 sapling_spends,
-                self.sapling_builder
-                    .as_ref()
-                    .zip(self.build_config.sapling_builder_config())
-                    .map_or(Ok(0), |(builder, (bundle_type, _))| {
-                        bundle_type
-                            .num_outputs(sapling_spends, builder.outputs().len())
-                            .map_err(FeeError::Bundle)
-                    })?,
-                self.orchard_builder
-                    .as_ref()
-                    .map_or(Ok(0), |builder| {
-                        orchard_action_count(
-                            builder,
-                            self.build_config.is_coinbase(),
-                            self.orchard_bundle_version
-                                .expect("orchard builder present implies bundle version"),
-                        )
-                    })
-                    .map_err(FeeError::Bundle)?,
+                sapling_outputs,
+                orchard_actions,
                 ironwood_actions + issue_actions,
             )
-            .map_err(FeeError::FeeRule)
+            .map_err(FeeError::FeeRule)?;
+
+        Ok(fee)
     }
 
     #[cfg(feature = "zip-233")]
@@ -1178,8 +1195,9 @@ impl<P: consensus::Parameters, U: sapling::builder::ProverProgress> Builder<P, U
         assert_eq!(self.build_config.is_coinbase(), fee.is_none());
         if let Some(fee) = fee {
             // After fees are accounted for, the value balance of the transaction must be zero.
+            let vb = self.value_balance()?;
             let balance_after_fees =
-                (self.value_balance()? - fee).ok_or(BalanceError::Underflow)?;
+                (vb - fee).ok_or(BalanceError::Underflow)?;
 
             match balance_after_fees.cmp(&ZatBalance::zero()) {
                 Ordering::Less => {
@@ -1412,7 +1430,8 @@ impl<P: consensus::Parameters, U> Builder<P, U> {
         //
 
         // After fees are accounted for, the value balance of the transaction must be zero.
-        let balance_after_fees = (self.value_balance()? - fee).ok_or(BalanceError::Underflow)?;
+        let vb = self.value_balance()?;
+        let balance_after_fees = (vb - fee).ok_or(BalanceError::Underflow)?;
 
         match balance_after_fees.cmp(&ZatBalance::zero()) {
             Ordering::Less => {
@@ -1422,7 +1441,7 @@ impl<P: consensus::Parameters, U> Builder<P, U> {
                 return Err(Error::ChangeRequired(balance_after_fees));
             }
             Ordering::Equal => (),
-        };
+        }
 
         let transparent_bundle = self.transparent_builder.build_for_pczt();
 
