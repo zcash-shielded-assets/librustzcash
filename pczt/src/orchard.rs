@@ -531,7 +531,7 @@ pub(crate) mod v2 {
         fn from(note_version: NoteVersion) -> Self {
             match note_version {
                 NoteVersion::V2 => Self::V2,
-                NoteVersion::V3 => Self::V3,
+                NoteVersion::V3 | NoteVersion::V3ZSA => Self::V3,
             }
         }
     }

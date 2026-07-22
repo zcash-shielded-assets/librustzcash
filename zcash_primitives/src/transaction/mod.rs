@@ -321,6 +321,9 @@ impl Authorization for Coinbase {
 pub struct Transaction {
     txid: TxId,
     data: TransactionData<Authorized>,
+    /// Raw 612-byte ZSA enc_ciphertexts per orchard action, populated for
+    /// Nu7 transactions. Empty for non-ZSA transactions.
+    pub zsa_action_enc_ciphertexts: alloc::vec::Vec<alloc::vec::Vec<u8>>,
 }
 
 impl Deref for Transaction {
@@ -384,6 +387,8 @@ impl Clone for Transaction {
         Transaction {
             txid: self.txid,
             data: self.data.clone(),
+            #[cfg(feature = "zsa")]
+            zsa_action_enc_ciphertexts: self.zsa_action_enc_ciphertexts.clone(),
         }
     }
 }
@@ -844,6 +849,8 @@ impl Transaction {
         let mut tx = Transaction {
             txid: TxId::from_bytes([0; 32]),
             data,
+            #[cfg(feature = "zsa")]
+            zsa_action_enc_ciphertexts: alloc::vec::Vec::new(),
         };
         let mut writer = HashWriter::default();
         tx.write(&mut writer)?;
@@ -858,7 +865,7 @@ impl Transaction {
             &data.digest(TxIdDigester),
         );
 
-        Transaction { txid, data }
+        Transaction { txid, data, zsa_action_enc_ciphertexts: alloc::vec::Vec::new() }
     }
 
     fn from_data_v6(data: TransactionData<Authorized>) -> Self {
@@ -868,7 +875,7 @@ impl Transaction {
             &data.digest(TxIdDigester),
         );
 
-        Transaction { txid, data }
+        Transaction { txid, data, zsa_action_enc_ciphertexts: alloc::vec::Vec::new() }
     }
 
     pub fn into_data(self) -> TransactionData<Authorized> {
@@ -960,6 +967,8 @@ impl Transaction {
         txid.copy_from_slice(&hash_bytes);
 
         Ok(Transaction {
+            #[cfg(feature = "zsa")]
+            zsa_action_enc_ciphertexts: alloc::vec::Vec::new(),
             txid: TxId::from_bytes(txid),
             data: TransactionData {
                 version,
@@ -1088,8 +1097,21 @@ impl Transaction {
         header_fragment: V6HeaderFragment,
     ) -> io::Result<Self> {
         let transparent_bundle = Self::read_transparent(&mut reader)?;
+        // ZSA V6 adds transparent sighash_info (one per vin) after vouts.
+        if let Some(ref tb) = transparent_bundle {
+            for _ in 0..tb.vin.len() {
+                let sighash_info = Vector::read(&mut reader, |r| r.read_u8())?;
+                if sighash_info != [0] {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "unexpected transparent sighash info",
+                    ));
+                }
+            }
+        }
         let sapling_bundle = sapling_serialization::read_v6_bundle(&mut reader)?;
-        let orchard_bundle = components::orchard_zsa::read_v6_bundle_zsa(&mut reader)?;
+        let (orchard_bundle, raw_enc_ciphertexts) =
+            components::orchard_zsa::read_v6_bundle_zsa(&mut reader)?;
         let issue_bundle = issuance::read_bundle(&mut reader)?;
 
         let data = TransactionData {
@@ -1103,11 +1125,16 @@ impl Transaction {
             sprout_bundle: None,
             sapling_bundle,
             orchard_bundle,
-            ironwood_bundle: None, // ZSA has no Ironwood pool
+            ironwood_bundle: None,
             issue_bundle,
         };
 
-        Ok(Self::from_data_v6(data))
+        let mut tx = Self::from_data_v6(data);
+        #[cfg(feature = "zsa")]
+        {
+            tx.zsa_action_enc_ciphertexts = raw_enc_ciphertexts;
+        }
+        Ok(tx)
     }
 
     /// Utility function for reading header data common to v5 and v6 transactions.
