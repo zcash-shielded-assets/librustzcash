@@ -13,7 +13,8 @@ impl super::Updater {
             transparent,
             sapling,
             orchard,
-            ironwood, ..
+            ironwood,
+            issue,
         } = self.pczt;
 
         let mut bundle = sapling.into_parsed().map_err(SaplingError::Parser)?;
@@ -27,7 +28,7 @@ impl super::Updater {
                 sapling: crate::sapling::Bundle::serialize_from(bundle),
                 orchard,
                 ironwood,
-                issue: Default::default(),
+                issue,
             },
         })
     }

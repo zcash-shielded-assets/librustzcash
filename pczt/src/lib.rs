@@ -98,6 +98,7 @@ pub struct Pczt {
     pub(crate) ironwood: orchard::Bundle,
 
     /// ZSA issuance bundle data (intents and actions).
+    #[getset(get = "pub")]
     pub(crate) issue: issue::Bundle,
 }
 

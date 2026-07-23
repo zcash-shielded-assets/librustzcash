@@ -1,21 +1,23 @@
-use orchard::{Bundle, bundle::Authorized, circuit::VerifyingKey};
+use orchard::{Bundle, bundle::Authorized, circuit::{OrchardCircuitVersion, VerifyingKey}};
 use rand_core::OsRng;
-use zcash_protocol::value::ZatBalance;
+use zcash_protocol::{consensus::BranchId, value::ZatBalance};
 
 pub(super) fn verify_bundle(
     bundle: &Bundle<Authorized, ZatBalance>,
     orchard_vk: Option<&VerifyingKey>,
     sighash: [u8; 32],
+    consensus_branch_id: BranchId,
 ) -> Result<(), OrchardError> {
     match orchard_vk {
         Some(vk) => verify_bundle_with_key(bundle, vk, sighash),
-        // The circuit version is fixed by the bundle's own `BundleVersion`, which
-        // `extract_tx_data` derives from the PCZT's consensus branch ID.
-        None => verify_bundle_with_key(
-            bundle,
-            &VerifyingKey::build(bundle.bundle_version().circuit_version()),
-            sighash,
-        ),
+        None => {
+            let vk = if consensus_branch_id == BranchId::Nu7 {
+                VerifyingKey::build_zsa()
+            } else {
+                VerifyingKey::build(bundle.bundle_version().circuit_version())
+            };
+            verify_bundle_with_key(bundle, &vk, sighash)
+        }
     }
 }
 
