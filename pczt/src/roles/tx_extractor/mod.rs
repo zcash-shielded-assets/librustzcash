@@ -182,11 +182,11 @@ impl<'a> TransactionExtractor<'a> {
                 .map_err(Error::Sapling)?;
         }
         if let Some(bundle) = tx.orchard_bundle() {
-            orchard::verify_bundle(bundle, orchard_vk, *shielded_sighash.as_ref(), consensus_branch_id)
+            orchard::verify_bundle(bundle, orchard_vk, *shielded_sighash.as_ref())
                 .map_err(Error::Orchard)?;
         }
         if let Some(bundle) = tx.ironwood_bundle() {
-            orchard::verify_bundle(bundle, orchard_vk, *shielded_sighash.as_ref(), consensus_branch_id)
+            orchard::verify_bundle(bundle, orchard_vk, *shielded_sighash.as_ref())
                 .map_err(Error::Ironwood)?;
         }
 

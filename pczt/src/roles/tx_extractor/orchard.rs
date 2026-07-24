@@ -1,14 +1,13 @@
-use orchard::{Bundle, bundle::Authorized, circuit::{OrchardCircuitVersion, VerifyingKey}};
+use orchard::{Bundle, bundle::Authorized, circuit::VerifyingKey};
 use rand_core::OsRng;
-use zcash_protocol::{consensus::BranchId, value::ZatBalance};
+use zcash_protocol::value::ZatBalance;
 
 pub(super) fn verify_bundle(
     bundle: &Bundle<Authorized, ZatBalance>,
     orchard_vk: Option<&VerifyingKey>,
     sighash: [u8; 32],
-    consensus_branch_id: BranchId,
 ) -> Result<(), OrchardError> {
-    let is_zsa = consensus_branch_id == BranchId::Nu7;
+    let is_zsa = bundle.bundle_version().circuit_version().is_zsa();
     match orchard_vk {
         Some(vk) => verify_bundle_with_key(bundle, vk, sighash, is_zsa),
         None => {
@@ -30,9 +29,11 @@ fn verify_bundle_with_key(
 ) -> Result<(), OrchardError> {
     let mut validator = orchard::bundle::BatchValidator::new(vk);
     if is_zsa {
-        validator
-            .add_bundle_zsa(bundle, sighash)
-            .map_err(|_| OrchardError::InvalidProof)?;
+        #[cfg(feature = "zsa")]
+        let enable_zsa = bundle.flags().zsa_enabled();
+        #[cfg(not(feature = "zsa"))]
+        let enable_zsa = false;
+        validator.add_bundle_zsa(bundle, sighash, enable_zsa);
     } else {
         validator
             .add_bundle(bundle, sighash)

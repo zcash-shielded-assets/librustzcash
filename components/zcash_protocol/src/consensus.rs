@@ -921,7 +921,7 @@ impl BranchId {
             Nu5 | Nu6 | Nu6_1 => Some(OrchardProtocolRevision::InsecureV1),
             Nu6_2 => Some(OrchardProtocolRevision::V2),
             Nu6_3 => Some(OrchardProtocolRevision::V3),
-            Nu7 => Some(OrchardProtocolRevision::V2), // ZSA: cross-address enabled for Orchard
+            Nu7 => Some(OrchardProtocolRevision::ZSA),
         }
     }
 }
@@ -947,6 +947,10 @@ pub enum OrchardProtocolRevision {
     /// prohibited for the Orchard value pool and permitted for the Ironwood value
     /// pool.
     V3,
+    /// The revision of the Orchard protocol deployed at NU7 (ZSA), which introduces
+    /// Zcash Shielded Assets. Uses the ZSA circuit; cross-address transfers are
+    /// permitted for both Orchard and Ironwood value pools.
+    ZSA,
 }
 
 #[cfg(any(test, feature = "test-dependencies"))]
@@ -1056,7 +1060,7 @@ mod tests {
         );
         assert_eq!(
             BranchId::Nu7.orchard_protocol_revision(),
-            Some(OrchardProtocolRevision::V2)
+            Some(OrchardProtocolRevision::ZSA)
         );
     }
 

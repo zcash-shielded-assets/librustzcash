@@ -125,10 +125,12 @@ pub fn bundle_version_for_branch(
             OrchardProtocolRevision::InsecureV1 => BundleVersion::orchard_insecure_v1(),
             OrchardProtocolRevision::V2 => BundleVersion::orchard_v2(),
             OrchardProtocolRevision::V3 => BundleVersion::orchard_v3(),
+            OrchardProtocolRevision::ZSA => BundleVersion::orchard_zsa(),
         }),
         ValuePool::Ironwood => match revision {
             OrchardProtocolRevision::InsecureV1 | OrchardProtocolRevision::V2 => None,
             OrchardProtocolRevision::V3 => Some(BundleVersion::ironwood_v3()),
+            OrchardProtocolRevision::ZSA => Some(BundleVersion::ironwood_zsa()),
         },
     }
 }
