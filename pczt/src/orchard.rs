@@ -812,6 +812,75 @@ impl Bundle {
         )
     }
 
+    /// Like `into_parsed_with_version` but handles both 580-byte (vanilla) and
+    /// 612-byte (ZSA) `enc_ciphertext` inputs by stripping the 32-byte encrypted
+    /// asset when present. The resulting PCZT bundle always uses vanilla
+    /// `OrchardDomain` (580-byte ciphertexts). This is a temporary bridge until
+    /// the full PCZT pipeline supports `OrchardZSADomain`.
+    pub(crate) fn into_parsed_stripping_zsa(
+        self,
+        bundle_version: BundleVersion,
+    ) -> Result<orchard::pczt::Bundle, orchard::pczt::ParseError> {
+        let note_version = self.note_version;
+        let actions = self
+            .actions
+            .into_iter()
+            .map(|action| {
+                let spend = orchard::pczt::Spend::parse(
+                    action.spend.nullifier,
+                    action.spend.rk,
+                    action.spend.spend_auth_sig,
+                    action.spend.recipient,
+                    action.spend.value,
+                    action.spend.rho,
+                    action.spend.rseed,
+                    action.spend.fvk,
+                    action.spend.witness,
+                    action.spend.alpha,
+                    action.spend.zip32_derivation.map(|z| {
+                        orchard::pczt::Zip32Derivation::parse(z.seed_fingerprint, z.derivation_path)
+                    }).transpose()?,
+                    action.spend.dummy_sk,
+                    note_version,
+                    action.spend.proprietary,
+                )?;
+                // Strip 32-byte ZSA asset field if present (612 → 580 bytes)
+                let enc_ciphertext = if action.output.enc_ciphertext.len() == 612 {
+                    let mut v = vec![0u8; 580];
+                    v[..52].copy_from_slice(&action.output.enc_ciphertext[..52]);
+                    v[52..].copy_from_slice(&action.output.enc_ciphertext[84..]);
+                    v
+                } else {
+                    action.output.enc_ciphertext
+                };
+                let output = orchard::pczt::Output::<orchard::note_encryption::OrchardDomain>::parse(
+                    *spend.nullifier(),
+                    action.output.cmx,
+                    action.output.ephemeral_key,
+                    enc_ciphertext,
+                    action.output.out_ciphertext,
+                    action.output.recipient,
+                    action.output.value,
+                    action.output.rseed,
+                    action.output.ock,
+                    action.output.zip32_derivation.map(|z| {
+                        orchard::pczt::Zip32Derivation::parse(z.seed_fingerprint, z.derivation_path)
+                    }).transpose()?,
+                    action.output.user_address,
+                    note_version,
+                    action.output.proprietary,
+                )?;
+                orchard::pczt::Action::<orchard::note_encryption::OrchardDomain>::parse(
+                    action.cv_net, spend, output, action.rcv,
+                )
+            })
+            .collect::<Result<_, _>>()?;
+        orchard::pczt::Bundle::<orchard::note_encryption::OrchardDomain>::parse(
+            actions, self.flags, bundle_version, self.value_sum, self.anchor,
+            self.zkproof, self.bsk,
+        )
+    }
+
     pub(crate) fn into_parsed_with_version_zsa(
         self,
         bundle_version: BundleVersion,

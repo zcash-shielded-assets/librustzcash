@@ -510,44 +510,35 @@ impl Pczt {
             .into_parsed()
             .map_err(ExtractError::TransparentParse)?;
         let sapling = sapling.into_parsed().map_err(ExtractError::SaplingParse)?;
-        let (orchard_parsed, orchard_zsa_parsed) = {
+        let bundle_version = crate::orchard::bundle_version_for_revision(
+            orchard_protocol_revision,
+            ::orchard::ValuePool::Orchard,
+        )
+        .expect("the Orchard pool is supported under every protocol revision");
+        // Parse with the domain-appropriate method. For Nu7 the builder produces
+        // 612-byte ZSA ciphertexts; parse with OrchardZSADomain so the sighash
+        // commitment uses ZSA indices matching the ZSA prover circuit.
+        let orchard = {
             #[cfg(feature = "zsa")]
             if consensus_branch_id == BranchId::Nu7 {
-                let p = orchard
-                    .into_parsed_with_version_zsa(
-                        crate::orchard::bundle_version_for_revision(
-                            orchard_protocol_revision,
-                            ::orchard::ValuePool::Orchard,
-                        )
-                        .expect("the Orchard pool is supported under every protocol revision"),
-                    )
-                    .map_err(ExtractError::OrchardParse)?;
-                (None, Some(p))
+                PcztOrchardBundle::Zsa(
+                    orchard
+                        .into_parsed_with_version_zsa(bundle_version)
+                        .map_err(ExtractError::OrchardParse)?,
+                )
             } else {
-                let p = orchard
-                    .into_parsed_with_version(
-                        crate::orchard::bundle_version_for_revision(
-                            orchard_protocol_revision,
-                            ::orchard::ValuePool::Orchard,
-                        )
-                        .expect("the Orchard pool is supported under every protocol revision"),
-                    )
-                    .map_err(ExtractError::OrchardParse)?;
-                (Some(p), None)
+                PcztOrchardBundle::Vanilla(
+                    orchard
+                        .into_parsed_with_version(bundle_version)
+                        .map_err(ExtractError::OrchardParse)?,
+                )
             }
             #[cfg(not(feature = "zsa"))]
-            {
-                let p = orchard
-                    .into_parsed_with_version(
-                        crate::orchard::bundle_version_for_revision(
-                            orchard_protocol_revision,
-                            ::orchard::ValuePool::Orchard,
-                        )
-                        .expect("the Orchard pool is supported under every protocol revision"),
-                    )
-                    .map_err(ExtractError::OrchardParse)?;
-                (Some(p), None)
-            }
+            PcztOrchardBundle::Vanilla(
+                orchard
+                    .into_parsed_with_version(bundle_version)
+                    .map_err(ExtractError::OrchardParse)?,
+            )
         };
         let ironwood = ironwood
             .into_ironwood_parsed()
@@ -558,16 +549,14 @@ impl Pczt {
 
         let transparent_bundle = extract_transparent(&transparent)?;
         let sapling_bundle = extract_sapling(&sapling)?;
-        #[cfg(feature = "zsa")]
-        let orchard_zsa_bundle = if let Some(ref p) = orchard_zsa_parsed {
-            extract_orchard_zsa(p)?
-        } else {
-            None
-        };
-        let orchard_bundle = if let Some(ref p) = orchard_parsed {
-            extract_orchard(p)?
-        } else {
-            None
+        let orchard_bundle = match &orchard {
+            PcztOrchardBundle::Vanilla(b) => extract_orchard(b)?,
+            #[cfg(feature = "zsa")]
+            PcztOrchardBundle::Zsa(_b) => {
+                // No vanilla bundle to extract; the ZSA variant is extracted
+                // separately in the Nu7 match arm below.
+                None
+            }
         };
         let ironwood_bundle = extract_ironwood(&ironwood)?;
         #[cfg(feature = "zsa")]
@@ -585,7 +574,7 @@ impl Pczt {
                     Zatoshis::ZERO,
                     transparent_bundle,
                     sapling_bundle,
-                    orchard_zsa_bundle.map(|b| OrchardBundle::OrchardZSA(b)),
+                    orchard_bundle.map(|b| OrchardBundle::OrchardVanilla(b)),
                     issue_bundle,
                 )
             }
@@ -614,21 +603,11 @@ impl Pczt {
             ),
         };
 
-        // For Nu7, orchard was parsed as ZSA domain and stored in orchard_zsa_parsed;
-        // the vanilla orchard_parsed is None. Store the raw orchard bundle for callers
-        // that need it (updaters/signers). They will re-parse with correct domain.
-        let orchard_for_parsed = orchard_parsed.unwrap_or_else(|| {
-            // Safety: for Nu7, we don't have a vanilla parsed bundle. Build a dummy
-            // with empty actions so callers that use `parsed.orchard` don't crash.
-            // In practice, IoFinalizer/Signer call `extract_tx_data` themselves,
-            // not via ParsedPczt.orchard.
-            unimplemented!("parsed.orchard not available for ZSA (Nu7) transactions")
-        });
         Ok(ParsedPczt {
             global,
             transparent,
             sapling,
-            orchard: orchard_for_parsed,
+            orchard,
             ironwood,
             issue,
             tx_data,
@@ -661,11 +640,24 @@ impl Pczt {
     not(any(feature = "io-finalizer", feature = "signer")),
     allow(dead_code)
 )]
+/// The parsed Orchard-pool PCZT bundle, domain-specific.
+pub(crate) enum PcztOrchardBundle {
+    Vanilla(::orchard::pczt::Bundle),
+    #[cfg(feature = "zsa")]
+    Zsa(::orchard::pczt::Bundle<::orchard::zsa::OrchardZSADomain>),
+}
+
+/// The result of parsing a PCZT and constructing its `TransactionData`.
+#[cfg(any(feature = "io-finalizer", feature = "signer", feature = "tx-extractor"))]
+#[cfg_attr(
+    not(any(feature = "io-finalizer", feature = "signer")),
+    allow(dead_code)
+)]
 pub(crate) struct ParsedPczt<A: Authorization> {
     pub(crate) global: Global,
     pub(crate) transparent: ::transparent::pczt::Bundle,
     pub(crate) sapling: ::sapling::pczt::Bundle,
-    pub(crate) orchard: ::orchard::pczt::Bundle,
+    pub(crate) orchard: PcztOrchardBundle,
     pub(crate) ironwood: ::orchard::pczt::Bundle,
     pub(crate) issue: crate::issue::Bundle,
     pub(crate) tx_data: TransactionData<A>,

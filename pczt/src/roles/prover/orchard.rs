@@ -14,23 +14,46 @@ impl super::Prover {
             issue,
         } = self.pczt;
 
-        let mut bundle = orchard
-            .into_parsed_with_version(
-                crate::orchard::orchard_bundle_version(&global)
-                    .ok_or(OrchardError::UnsupportedConsensusBranchId)?,
-            )
-            .map_err(OrchardError::Parser)?;
+        let bundle_version = crate::orchard::orchard_bundle_version(&global)
+            .ok_or(OrchardError::UnsupportedConsensusBranchId)?;
 
-        bundle
-            .create_proof(pk, OsRng)
-            .map_err(OrchardError::Prover)?;
+        #[cfg(feature = "zsa")]
+        let is_nu7 = u32::from(
+            zcash_protocol::consensus::BranchId::try_from(global.consensus_branch_id)
+                .unwrap_or(zcash_protocol::consensus::BranchId::Nu5),
+        ) == u32::from(zcash_protocol::consensus::BranchId::Nu7);
+
+        let orchard_raw = {
+            #[cfg(feature = "zsa")]
+            if is_nu7 {
+                let mut b = orchard
+                    .into_parsed_with_version_zsa(bundle_version)
+                    .map_err(OrchardError::Parser)?;
+                b.create_proof(pk, OsRng).map_err(OrchardError::Prover)?;
+                crate::orchard::Bundle::serialize_from(b)
+            } else {
+                let mut b = orchard
+                    .into_parsed_with_version(bundle_version)
+                    .map_err(OrchardError::Parser)?;
+                b.create_proof(pk, OsRng).map_err(OrchardError::Prover)?;
+                crate::orchard::Bundle::serialize_from(b)
+            }
+            #[cfg(not(feature = "zsa"))]
+            {
+                let mut b = orchard
+                    .into_parsed_with_version(bundle_version)
+                    .map_err(OrchardError::Parser)?;
+                b.create_proof(pk, OsRng).map_err(OrchardError::Prover)?;
+                crate::orchard::Bundle::serialize_from(b)
+            }
+        };
 
         Ok(Self {
             pczt: Pczt {
                 global,
                 transparent,
                 sapling,
-                orchard: crate::orchard::Bundle::serialize_from(bundle),
+                orchard: orchard_raw,
                 ironwood,
                 issue,
             },

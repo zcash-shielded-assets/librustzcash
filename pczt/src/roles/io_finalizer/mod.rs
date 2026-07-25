@@ -7,7 +7,7 @@ use rand_core::OsRng;
 use zcash_primitives::transaction::{sighash::SignableInput, txid::TxIdDigester};
 
 use crate::{
-    ExtractError, ParsedPczt, Pczt,
+    ExtractError, ParsedPczt, Pczt, PcztOrchardBundle,
     common::{
         FLAG_SHIELDED_MODIFIABLE, FLAG_TRANSPARENT_INPUTS_MODIFIABLE,
         FLAG_TRANSPARENT_OUTPUTS_MODIFIABLE,
@@ -91,9 +91,17 @@ impl IoFinalizer {
         // it stays in its canonical empty form (and so remains omissible by, or
         // representable in, the serialization formats).
         if has_orchard_actions {
-            orchard
-                .finalize_io(shielded_sighash, OsRng)
-                .map_err(Error::OrchardFinalize)?;
+            match &mut orchard {
+                PcztOrchardBundle::Vanilla(b) => {
+                    b.finalize_io(shielded_sighash, OsRng)
+                        .map_err(Error::OrchardFinalize)?;
+                }
+                #[cfg(feature = "zsa")]
+                PcztOrchardBundle::Zsa(b) => {
+                    b.finalize_io(shielded_sighash, OsRng)
+                        .map_err(Error::OrchardFinalize)?;
+                }
+            }
         }
         if has_ironwood_actions {
             ironwood
@@ -101,12 +109,17 @@ impl IoFinalizer {
                 .map_err(Error::IronwoodFinalize)?;
         }
 
+        let orchard_raw = match orchard {
+            PcztOrchardBundle::Vanilla(b) => crate::orchard::Bundle::serialize_from(b),
+            #[cfg(feature = "zsa")]
+            PcztOrchardBundle::Zsa(b) => crate::orchard::Bundle::serialize_from(b),
+        };
         Ok((
             Pczt {
                 global,
                 transparent: crate::transparent::Bundle::serialize_from(transparent),
                 sapling: crate::sapling::Bundle::serialize_from(sapling),
-                orchard: crate::orchard::Bundle::serialize_from(orchard),
+                orchard: orchard_raw,
                 ironwood: crate::orchard::Bundle::serialize_from(ironwood),
                 issue,
             },
