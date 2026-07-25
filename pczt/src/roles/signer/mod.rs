@@ -77,7 +77,7 @@ impl Signer {
             #[cfg(feature = "zsa")]
             |issue| Ok(issue.to_effects()),
             #[cfg(feature = "zsa")]
-            |_o| Ok(None), // ZSA orchard extraction — not yet implemented
+            |o| o.extract_effects().map_err(ExtractError::OrchardExtract),
         )?;
         let txid_parts = tx_data.digest(TxIdDigester);
         let shielded_sighash = sighash(&tx_data, &SignableInput::Shielded, &txid_parts);

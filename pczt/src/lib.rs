@@ -550,12 +550,10 @@ impl Pczt {
         let transparent_bundle = extract_transparent(&transparent)?;
         let sapling_bundle = extract_sapling(&sapling)?;
         let orchard_bundle = match &orchard {
-            PcztOrchardBundle::Vanilla(b) => extract_orchard(b)?,
+            PcztOrchardBundle::Vanilla(b) => extract_orchard(b)?.map(OrchardBundle::OrchardVanilla),
             #[cfg(feature = "zsa")]
-            PcztOrchardBundle::Zsa(_b) => {
-                // No vanilla bundle to extract; the ZSA variant is extracted
-                // separately in the Nu7 match arm below.
-                None
+            PcztOrchardBundle::Zsa(b) => {
+                extract_orchard_zsa(b)?.map(OrchardBundle::OrchardZSA)
             }
         };
         let ironwood_bundle = extract_ironwood(&ironwood)?;
@@ -574,7 +572,7 @@ impl Pczt {
                     Zatoshis::ZERO,
                     transparent_bundle,
                     sapling_bundle,
-                    orchard_bundle.map(|b| OrchardBundle::OrchardVanilla(b)),
+                    orchard_bundle,
                     issue_bundle,
                 )
             }
@@ -586,7 +584,11 @@ impl Pczt {
                 Zatoshis::ZERO,
                 transparent_bundle,
                 sapling_bundle,
-                orchard_bundle,
+                orchard_bundle.map(|b| match b {
+                    OrchardBundle::OrchardVanilla(b) => b,
+                    #[cfg(feature = "zsa")]
+                    OrchardBundle::OrchardZSA(_) => panic!("ZSA in non-Nu7 V6"),
+                }),
                 ironwood_bundle,
             ),
             _ => TransactionData::from_parts(
@@ -599,7 +601,11 @@ impl Pczt {
                 transparent_bundle,
                 None,
                 sapling_bundle,
-                orchard_bundle,
+                orchard_bundle.map(|b| match b {
+                    OrchardBundle::OrchardVanilla(b) => b,
+                    #[cfg(feature = "zsa")]
+                    OrchardBundle::OrchardZSA(_) => panic!("ZSA in pre-V6 tx"),
+                }),
             ),
         };
 
@@ -628,7 +634,7 @@ impl Pczt {
             #[cfg(feature = "zsa")]
             |issue| Ok(issue.to_effects()),
             #[cfg(feature = "zsa")]
-            |_o| Ok(None), // ZSA orchard extraction — not yet implemented
+            |o| o.extract_effects().map_err(ExtractError::OrchardExtract),
         )
         .map(|parsed| parsed.tx_data)
     }

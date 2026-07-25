@@ -67,7 +67,7 @@ impl IoFinalizer {
             #[cfg(feature = "zsa")]
             |issue| Ok(issue.to_effects()),
             #[cfg(feature = "zsa")]
-            |_o| Ok(None), // ZSA orchard extraction — not yet implemented
+            |o| o.extract_effects().map_err(ExtractError::OrchardExtract),
         )?;
 
         // After shielded IO finalization, the transaction effects cannot be modified
