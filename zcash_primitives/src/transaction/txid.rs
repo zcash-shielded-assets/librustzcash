@@ -350,13 +350,21 @@ impl<A: Authorization> TransactionDigest<A> for TxIdDigester {
     fn digest_orchard(
         &self,
         version: TxVersion,
-        orchard_bundle: Option<&orchard::Bundle<A::OrchardAuth, ZatBalance>>,
+        orchard_bundle: Option<&super::OrchardBundle<A::OrchardAuth>>,
     ) -> Self::OrchardDigest {
         orchard_bundle.map(|b| {
             let (_, tx_version) = orchard_commitment_domain(version);
-            b.commitment(tx_version)
-                .expect("Orchard bundle flags must be representable in their transaction format")
-                .0
+            match b {
+                super::OrchardBundle::OrchardVanilla(bundle) => bundle
+                    .commitment(tx_version)
+                    .expect("Orchard bundle flags must be representable in their transaction format")
+                    .0,
+                #[cfg(feature = "zsa")]
+                super::OrchardBundle::OrchardZSA(bundle) => bundle
+                    .commitment(tx_version)
+                    .expect("ZSA orchard bundle flags must be representable in their transaction format")
+                    .0,
+            }
         })
     }
 
@@ -674,7 +682,7 @@ impl TransactionDigest<Authorized> for BlockTxCommitmentDigester {
     fn digest_orchard(
         &self,
         version: TxVersion,
-        orchard_bundle: Option<&orchard::Bundle<orchard::Authorized, ZatBalance>>,
+        orchard_bundle: Option<&super::OrchardBundle<<Authorized as Authorization>::OrchardAuth>>,
     ) -> Self::OrchardDigest {
         let (value_pool, tx_version) = orchard_commitment_domain(version);
         orchard_bundle.map_or_else(
@@ -682,10 +690,18 @@ impl TransactionDigest<Authorized> for BlockTxCommitmentDigester {
                 orchard::commitments::hash_bundle_auth_empty(value_pool, tx_version)
                     .expect("empty Orchard bundle auth commitment is valid for its tx format")
             },
-            |b| {
-                b.authorizing_commitment(tx_version)
-                    .expect("Orchard bundle flags must be representable in their tx format")
-                    .0
+            |b| match b {
+                super::OrchardBundle::OrchardVanilla(bundle) => {
+                    bundle.authorizing_commitment(tx_version)
+                        .expect("Orchard bundle flags must be representable in their tx format")
+                        .0
+                }
+                #[cfg(feature = "zsa")]
+                super::OrchardBundle::OrchardZSA(bundle) => {
+                    bundle.authorizing_commitment(tx_version)
+                        .expect("ZSA orchard bundle flags must be representable in their tx format")
+                        .0
+                }
             },
         )
     }

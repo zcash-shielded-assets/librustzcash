@@ -18,7 +18,7 @@ use zcash_protocol::{
 use zcash_script::opcode::PushValue;
 
 use crate::transaction::{
-    Transaction, TxVersion,
+    OrchardBundle, Transaction, TxVersion,
     components::orchard::bundle_version_for_branch,
     fees::{
         FeeRule,
@@ -1317,7 +1317,7 @@ impl<P: consensus::Parameters, U: sapling::builder::ProverProgress> Builder<P, U
             // <https://zips.z.cash/protocol/protocol.pdf#txnconsensus>
             sprout_bundle: None,
             sapling_bundle,
-            orchard_bundle,
+            orchard_bundle: orchard_bundle.map(OrchardBundle::OrchardVanilla),
             ironwood_bundle,
             #[cfg(feature = "zsa")]
             issue_bundle: None,
@@ -1372,16 +1372,26 @@ impl<P: consensus::Parameters, U: sapling::builder::ProverProgress> Builder<P, U
 
         let orchard_bundle = unauthed_tx
             .orchard_bundle
-            .map(|b| {
-                b.create_proof(
-                    orchard_proving_key
-                        .as_ref()
-                        .expect("proving key is built when an Orchard bundle is present"),
-                    &mut rng,
-                )
-                .and_then(|b| {
-                    b.apply_signatures(&mut rng, *shielded_sig_commitment.as_ref(), orchard_saks)
-                })
+            .map(|b| match b {
+                OrchardBundle::OrchardVanilla(bundle) => bundle
+                    .create_proof(
+                        orchard_proving_key
+                            .as_ref()
+                            .expect("proving key is built when an Orchard bundle is present"),
+                        &mut rng,
+                    )
+                    .and_then(|b| {
+                        b.apply_signatures(
+                            &mut rng,
+                            *shielded_sig_commitment.as_ref(),
+                            orchard_saks,
+                        )
+                    })
+                    .map(OrchardBundle::OrchardVanilla),
+                #[cfg(feature = "zsa")]
+                OrchardBundle::OrchardZSA(_) => {
+                    unreachable!("ZSA bundles are not created by the Builder; use ZsaBuilder")
+                }
             })
             .transpose()
             .map_err(Error::OrchardBuild)?;

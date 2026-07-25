@@ -131,34 +131,73 @@ pub fn read_v6_bundle_zsa<R: Read>(
 /// of zero-padding the 32-byte asset field.
 pub fn write_v6_bundle_zsa<W: Write>(
     mut writer: W,
-    bundle: Option<&orchard::Bundle<Authorized, ZatBalance>>,
+    bundle: Option<&crate::transaction::OrchardBundle<Authorized>>,
     raw_enc_ciphertexts: &[Vec<u8>],
 ) -> io::Result<()> {
+    use crate::transaction::OrchardBundle;
+
     if let Some(bundle) = bundle {
         CompactSize::write(&mut writer, 1usize)?; // nActionGroups
-        // Write the CompactSize action count then each action
-        CompactSize::write(&mut writer, bundle.actions().len())?;
-        for (i, act) in bundle.actions().iter().enumerate() {
-            let raw_enc = raw_enc_ciphertexts.get(i).map(|v| v.as_slice());
-            write_action_zsa(&mut writer, act, raw_enc)?;
+
+        match bundle {
+            OrchardBundle::OrchardVanilla(bundle) => {
+                CompactSize::write(&mut writer, bundle.actions().len())?;
+                for (i, act) in bundle.actions().iter().enumerate() {
+                    let raw_enc = raw_enc_ciphertexts.get(i).map(|v| v.as_slice());
+                    write_action_zsa(&mut writer, act, raw_enc)?;
+                }
+                let flags_byte = bundle.flags().to_byte(bundle.bundle_version()).ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidData, "flags not encodable")
+                })?;
+                writer.write_u8(flags_byte)?;
+                writer.write_all(&bundle.anchor().to_bytes())?;
+                writer.write_u32_le(0)?; // nAGExpiryHeight
+                CompactSize::write(&mut writer, 0usize)?; // burn
+
+                Vector::write(&mut writer, bundle.authorization().proof().as_ref(), |w, b| w.write_u8(*b))?;
+                Array::write(&mut writer, bundle.actions().iter().map(|a| a.authorization()), |w, auth| {
+                    write_versioned_sig(w, auth)
+                })?;
+                writer.write_all(&bundle.value_balance().to_i64_le_bytes())?;
+                write_versioned_sig(&mut writer, bundle.authorization().binding_signature())?;
+            }
+            #[cfg(feature = "zsa")]
+            OrchardBundle::OrchardZSA(bundle) => {
+                CompactSize::write(&mut writer, bundle.actions().len())?;
+                for (i, act) in bundle.actions().iter().enumerate() {
+                    let raw_enc = raw_enc_ciphertexts.get(i).map(|v| v.as_slice());
+                    super::orchard::write_value_commitment(&mut writer, act.cv_net())?;
+                    super::orchard::write_nullifier(&mut writer, act.nullifier())?;
+                    super::orchard::write_verification_key(&mut writer, act.rk())?;
+                    super::orchard::write_cmx(&mut writer, act.cmx())?;
+                    let nc = act.encrypted_note();
+                    if let Some(raw_enc) = raw_enc {
+                        writer.write_all(&nc.epk_bytes)?;
+                        writer.write_all(raw_enc)?;
+                        writer.write_all(&nc.out_ciphertext)?;
+                    } else {
+                        writer.write_all(&nc.epk_bytes)?;
+                        writer.write_all(&nc.enc_ciphertext.as_ref()[..84])?;
+                        writer.write_all(&nc.enc_ciphertext.as_ref()[84..])?;
+                        writer.write_all(&nc.out_ciphertext)?;
+                    }
+                }
+                let flags_byte = bundle.flags().to_byte(bundle.bundle_version()).ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidData, "flags not encodable")
+                })?;
+                writer.write_u8(flags_byte)?;
+                writer.write_all(&bundle.anchor().to_bytes())?;
+                writer.write_u32_le(0)?; // nAGExpiryHeight
+                CompactSize::write(&mut writer, 0usize)?; // burn
+
+                Vector::write(&mut writer, bundle.authorization().proof().as_ref(), |w, b| w.write_u8(*b))?;
+                Array::write(&mut writer, bundle.actions().iter().map(|a| a.authorization()), |w, auth| {
+                    write_versioned_sig(w, auth)
+                })?;
+                writer.write_all(&bundle.value_balance().to_i64_le_bytes())?;
+                write_versioned_sig(&mut writer, bundle.authorization().binding_signature())?;
+            }
         }
-
-        let flags_byte = bundle.flags().to_byte(bundle.bundle_version()).ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidData, "flags not encodable")
-        })?;
-        writer.write_u8(flags_byte)?;
-        writer.write_all(&bundle.anchor().to_bytes())?;
-        writer.write_u32_le(0)?; // nAGExpiryHeight
-        CompactSize::write(&mut writer, 0usize)?; // burn
-
-        Vector::write(&mut writer, bundle.authorization().proof().as_ref(), |w, b| w.write_u8(*b))?;
-
-        Array::write(&mut writer, bundle.actions().iter().map(|a| a.authorization()), |w, auth| {
-            write_versioned_sig(w, auth)
-        })?;
-
-        writer.write_all(&bundle.value_balance().to_i64_le_bytes())?;
-        write_versioned_sig(&mut writer, bundle.authorization().binding_signature())?;
     } else {
         CompactSize::write(&mut writer, 0usize)?;
     }

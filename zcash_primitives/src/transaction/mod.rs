@@ -61,10 +61,94 @@ pub use zcash_protocol::TxId;
 
 /// An Orchard bundle that may be either the standard (Ironwood / vanilla) or
 /// the ZSA variant with 84-byte notes and asset support.
-#[cfg(feature = "zsa")]
+#[derive(Debug)]
 pub enum OrchardBundle<A: orchard::bundle::Authorization> {
     OrchardVanilla(orchard::Bundle<A, ZatBalance>),
+    #[cfg(feature = "zsa")]
     OrchardZSA(orchard::Bundle<A, ZatBalance, OrchardZSADomain>),
+}
+
+impl<A: orchard::bundle::Authorization> OrchardBundle<A> {
+    pub fn value_balance(&self) -> &ZatBalance {
+        match self {
+            Self::OrchardVanilla(b) => b.value_balance(),
+            #[cfg(feature = "zsa")]
+            Self::OrchardZSA(b) => b.value_balance(),
+        }
+    }
+    pub fn flags(&self) -> &orchard::bundle::Flags {
+        match self {
+            Self::OrchardVanilla(b) => b.flags(),
+            #[cfg(feature = "zsa")]
+            Self::OrchardZSA(b) => b.flags(),
+        }
+    }
+    pub fn anchor(&self) -> &orchard::tree::Anchor {
+        match self {
+            Self::OrchardVanilla(b) => b.anchor(),
+            #[cfg(feature = "zsa")]
+            Self::OrchardZSA(b) => b.anchor(),
+        }
+    }
+    pub fn authorization(&self) -> &A {
+        match self {
+            Self::OrchardVanilla(b) => b.authorization(),
+            #[cfg(feature = "zsa")]
+            Self::OrchardZSA(b) => b.authorization(),
+        }
+    }
+    pub fn bundle_version(&self) -> orchard::bundle::BundleVersion {
+        match self {
+            Self::OrchardVanilla(b) => b.bundle_version(),
+            #[cfg(feature = "zsa")]
+            Self::OrchardZSA(b) => b.bundle_version(),
+        }
+    }
+    pub fn flag_byte(&self) -> u8 {
+        match self {
+            Self::OrchardVanilla(b) => b.flag_byte(),
+            #[cfg(feature = "zsa")]
+            Self::OrchardZSA(b) => b.flag_byte(),
+        }
+    }
+    /// Apply a fallible closure to the vanilla inner bundle. Returns `None` for
+    /// ZSA variant (callers that need ZSA should use `try_map_bundles_zsa`).
+    pub fn try_map_vanilla<B: orchard::bundle::Authorization, E>(
+        self,
+        f: impl FnOnce(
+            orchard::Bundle<A, ZatBalance>,
+        ) -> Result<orchard::Bundle<B, ZatBalance>, E>,
+    ) -> Result<OrchardBundle<B>, E> {
+        match self {
+            Self::OrchardVanilla(b) => f(b).map(OrchardBundle::OrchardVanilla),
+            #[cfg(feature = "zsa")]
+            Self::OrchardZSA(_) => {
+                panic!("try_map_vanilla called on OrchardZSA; use try_map_bundles_zsa")
+            }
+        }
+    }
+
+    /// Map authorization on the inner bundle. Mechanical dispatch.
+    pub fn map_authorization<R, B: orchard::bundle::Authorization>(
+        self,
+        context: &mut R,
+        mut spend_auth: impl FnMut(
+            &mut R,
+            &A,
+            <A as orchard::bundle::Authorization>::SpendAuth,
+        ) -> <B as orchard::bundle::Authorization>::SpendAuth,
+        step: impl FnOnce(&mut R, A) -> B,
+    ) -> OrchardBundle<B> {
+        match self {
+            Self::OrchardVanilla(b) => {
+                OrchardBundle::OrchardVanilla(b.map_authorization(context, spend_auth, step))
+            }
+            #[cfg(feature = "zsa")]
+            Self::OrchardZSA(b) => {
+                OrchardBundle::OrchardZSA(b.map_authorization(context, spend_auth, step))
+            }
+        }
+}
 }
 
 #[cfg(feature = "zsa")]
@@ -352,7 +436,7 @@ pub struct TransactionData<A: Authorization> {
     transparent_bundle: Option<transparent::Bundle<A::TransparentAuth>>,
     sprout_bundle: Option<sprout::Bundle>,
     sapling_bundle: Option<sapling::Bundle<A::SaplingAuth, ZatBalance>>,
-    orchard_bundle: Option<orchard::bundle::Bundle<A::OrchardAuth, ZatBalance>>,
+    orchard_bundle: Option<OrchardBundle<A::OrchardAuth>>,
     ironwood_bundle: Option<orchard::bundle::Bundle<A::OrchardAuth, ZatBalance>>,
     /// Issuance bundle for ZSA asset creation.
     #[cfg(feature = "zsa")]
@@ -371,7 +455,11 @@ impl Clone for TransactionData<Authorized> {
             transparent_bundle: self.transparent_bundle.clone(),
             sprout_bundle: self.sprout_bundle.clone(),
             sapling_bundle: self.sapling_bundle.clone(),
-            orchard_bundle: self.orchard_bundle.clone(),
+            orchard_bundle: self.orchard_bundle.as_ref().map(|b| match b {
+                OrchardBundle::OrchardVanilla(b) => OrchardBundle::OrchardVanilla(b.clone()),
+                #[cfg(feature = "zsa")]
+                OrchardBundle::OrchardZSA(b) => OrchardBundle::OrchardZSA(b.clone()),
+            }),
             ironwood_bundle: self.ironwood_bundle.clone(),
             #[cfg(feature = "zsa")]
             issue_bundle: self.issue_bundle.clone(),
@@ -417,7 +505,7 @@ impl<A: Authorization> TransactionData<A> {
             transparent_bundle,
             sprout_bundle,
             sapling_bundle,
-            orchard_bundle,
+            orchard_bundle: orchard_bundle.map(OrchardBundle::OrchardVanilla),
             ironwood_bundle: None,
             #[cfg(feature = "zsa")]
             issue_bundle: None,
@@ -457,7 +545,7 @@ impl<A: Authorization> TransactionData<A> {
             transparent_bundle,
             sprout_bundle: None,
             sapling_bundle,
-            orchard_bundle,
+            orchard_bundle: orchard_bundle.map(OrchardBundle::OrchardVanilla),
             ironwood_bundle,
             #[cfg(feature = "zsa")]
             issue_bundle: None,
@@ -479,7 +567,7 @@ impl<A: Authorization> TransactionData<A> {
         #[cfg(feature = "zip-233")] zip233_amount: Zatoshis,
         transparent_bundle: Option<transparent::Bundle<A::TransparentAuth>>,
         sapling_bundle: Option<sapling::Bundle<A::SaplingAuth, ZatBalance>>,
-        orchard_bundle: Option<orchard::Bundle<A::OrchardAuth, ZatBalance>>,
+        orchard_bundle: Option<OrchardBundle<A::OrchardAuth>>,
         issue_bundle: Option<IssueBundle<A::IssueAuth>>,
     ) -> Self {
         TransactionData {
@@ -528,7 +616,7 @@ impl<A: Authorization> TransactionData<A> {
         self.sapling_bundle.as_ref()
     }
 
-    pub fn orchard_bundle(&self) -> Option<&orchard::Bundle<A::OrchardAuth, ZatBalance>> {
+    pub fn orchard_bundle(&self) -> Option<&OrchardBundle<A::OrchardAuth>> {
         self.orchard_bundle.as_ref()
     }
 
@@ -669,7 +757,12 @@ impl<A: Authorization> TransactionData<A> {
             transparent_bundle: f_transparent(self.transparent_bundle),
             sprout_bundle: self.sprout_bundle,
             sapling_bundle: f_sapling(self.sapling_bundle),
-            orchard_bundle: f_orchard(self.orchard_bundle),
+            orchard_bundle: self.orchard_bundle.and_then(|b| match b {
+                OrchardBundle::OrchardVanilla(bundle) => f_orchard(Some(bundle))
+                    .map(OrchardBundle::OrchardVanilla),
+                #[cfg(feature = "zsa")]
+                OrchardBundle::OrchardZSA(_) => None,
+            }),
             ironwood_bundle: f_orchard(self.ironwood_bundle),
             #[cfg(feature = "zsa")]
             issue_bundle: None,
@@ -703,6 +796,14 @@ impl<A: Authorization> TransactionData<A> {
             E,
         >,
     ) -> Result<TransactionData<B>, E> {
+        let orchard_bundle: Option<OrchardBundle<B::OrchardAuth>> = match self.orchard_bundle {
+            None => None,
+            Some(OrchardBundle::OrchardVanilla(bundle)) => {
+                f_orchard(Some(bundle)).map(|b| b.map(OrchardBundle::OrchardVanilla))?
+            }
+            #[cfg(feature = "zsa")]
+            Some(OrchardBundle::OrchardZSA(_)) => None,
+        };
         Ok(TransactionData {
             version: self.version,
             consensus_branch_id: self.consensus_branch_id,
@@ -713,7 +814,7 @@ impl<A: Authorization> TransactionData<A> {
             transparent_bundle: f_transparent(self.transparent_bundle)?,
             sprout_bundle: self.sprout_bundle,
             sapling_bundle: f_sapling(self.sapling_bundle)?,
-            orchard_bundle: f_orchard(self.orchard_bundle)?,
+            orchard_bundle,
             ironwood_bundle: f_orchard(self.ironwood_bundle)?,
             #[cfg(feature = "zsa")]
             issue_bundle: None,
@@ -739,9 +840,9 @@ impl<A: Authorization> TransactionData<A> {
         )
             -> Result<Option<sapling::Bundle<B::SaplingAuth, ZatBalance>>, E>,
         mut f_orchard: impl FnMut(
-            Option<orchard::bundle::Bundle<A::OrchardAuth, ZatBalance>>,
+            Option<OrchardBundle<A::OrchardAuth>>,
         ) -> Result<
-            Option<orchard::bundle::Bundle<B::OrchardAuth, ZatBalance>>,
+            Option<OrchardBundle<B::OrchardAuth>>,
             E,
         >,
         f_issue: impl FnOnce(
@@ -1040,7 +1141,7 @@ impl Transaction {
             transparent_bundle,
             sprout_bundle: None,
             sapling_bundle,
-            orchard_bundle,
+            orchard_bundle: orchard_bundle.map(OrchardBundle::OrchardVanilla),
             ironwood_bundle: None,
             #[cfg(feature = "zsa")]
             issue_bundle: None,
@@ -1078,7 +1179,7 @@ impl Transaction {
             transparent_bundle,
             sprout_bundle: None,
             sapling_bundle,
-            orchard_bundle,
+            orchard_bundle: orchard_bundle.map(OrchardBundle::OrchardVanilla),
             ironwood_bundle,
             #[cfg(feature = "zsa")]
             issue_bundle: None,
@@ -1124,7 +1225,7 @@ impl Transaction {
             transparent_bundle,
             sprout_bundle: None,
             sapling_bundle,
-            orchard_bundle,
+            orchard_bundle: orchard_bundle.map(OrchardBundle::OrchardVanilla),
             ironwood_bundle: None,
             issue_bundle,
         };
@@ -1277,7 +1378,12 @@ impl Transaction {
         self.write_v5_header(&mut writer)?;
         self.write_transparent(&mut writer)?;
         self.write_v5_sapling(&mut writer)?;
-        orchard_serialization::write_v5_bundle(self.orchard_bundle.as_ref(), &mut writer)?;
+        let vanilla = self.orchard_bundle.as_ref().map(|b| match b {
+            OrchardBundle::OrchardVanilla(b) => b,
+            #[cfg(feature = "zsa")]
+            OrchardBundle::OrchardZSA(_) => panic!("ZSA bundle in V5 tx"),
+        });
+        orchard_serialization::write_v5_bundle(vanilla, &mut writer)?;
 
         Ok(())
     }
@@ -1293,7 +1399,12 @@ impl Transaction {
 
         self.write_transparent(&mut writer)?;
         sapling_serialization::write_v5_bundle(&mut writer, self.sapling_bundle.as_ref())?;
-        orchard_serialization::write_v6_bundle(self.orchard_bundle.as_ref(), &mut writer)?;
+        let vanilla = self.orchard_bundle.as_ref().map(|b| match b {
+            OrchardBundle::OrchardVanilla(b) => b,
+            #[cfg(feature = "zsa")]
+            OrchardBundle::OrchardZSA(_) => panic!("ZSA bundle in V6/Ironwood tx"),
+        });
+        orchard_serialization::write_v6_bundle(vanilla, &mut writer)?;
         orchard_serialization::write_v6_bundle(self.ironwood_bundle.as_ref(), &mut writer)?;
 
         Ok(())
@@ -1424,7 +1535,7 @@ pub trait TransactionDigest<A: Authorization> {
     fn digest_orchard(
         &self,
         version: TxVersion,
-        orchard_bundle: Option<&orchard::Bundle<A::OrchardAuth, ZatBalance>>,
+        orchard_bundle: Option<&OrchardBundle<A::OrchardAuth>>,
     ) -> Self::OrchardDigest;
 
     /// Computes the digest for the Ironwood bundle.

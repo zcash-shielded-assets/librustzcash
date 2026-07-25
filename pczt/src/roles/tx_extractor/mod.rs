@@ -6,7 +6,7 @@ use core::marker::PhantomData;
 use rand_core::OsRng;
 
 use zcash_primitives::transaction::{
-    Authorization, Transaction,
+    Authorization, OrchardBundle, Transaction,
     sighash::{SignableInput, signature_hash},
     txid::TxIdDigester,
 };
@@ -106,6 +106,8 @@ impl<'a> TransactionExtractor<'a> {
             },
             #[cfg(feature = "zsa")]
             |issue| Ok(issue.to_effects()),
+            #[cfg(feature = "zsa")]
+            |_o| Ok(None), // ZSA orchard extraction — not yet implemented
         )?;
 
         // The commitment being signed is shared across all shielded inputs.
@@ -125,12 +127,17 @@ impl<'a> TransactionExtractor<'a> {
                     })
                     .transpose()
                 },
-                |o| {
-                    o.map(|o| {
-                        o.apply_binding_signature(*shielded_sighash.as_ref(), OsRng)
+                |o| match o {
+                    Some(OrchardBundle::OrchardVanilla(bundle)) => {
+                        bundle.apply_binding_signature(*shielded_sighash.as_ref(), OsRng)
                             .ok_or(Error::SighashMismatch)
-                    })
-                    .transpose()
+                            .map(|b| Some(OrchardBundle::OrchardVanilla(b)))
+                    }
+                    #[cfg(feature = "zsa")]
+                    Some(OrchardBundle::OrchardZSA(_)) => {
+                        unreachable!("PCZT ZSA extraction not yet implemented")
+                    }
+                    None => Ok(None),
                 },
                 |_issue| Ok(saved_signed_issue),
             )?
@@ -182,8 +189,16 @@ impl<'a> TransactionExtractor<'a> {
                 .map_err(Error::Sapling)?;
         }
         if let Some(bundle) = tx.orchard_bundle() {
-            orchard::verify_bundle(bundle, orchard_vk, *shielded_sighash.as_ref())
-                .map_err(Error::Orchard)?;
+            match bundle {
+                OrchardBundle::OrchardVanilla(b) => {
+                    orchard::verify_bundle(b, orchard_vk, *shielded_sighash.as_ref())
+                        .map_err(Error::Orchard)?;
+                }
+                #[cfg(feature = "zsa")]
+                OrchardBundle::OrchardZSA(_) => {
+                    // ZSA verification — not yet implemented for PCZT path
+                }
+            }
         }
         if let Some(bundle) = tx.ironwood_bundle() {
             orchard::verify_bundle(bundle, orchard_vk, *shielded_sighash.as_ref())

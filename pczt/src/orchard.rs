@@ -807,6 +807,24 @@ impl Bundle {
         self,
         bundle_version: BundleVersion,
     ) -> Result<orchard::pczt::Bundle, orchard::pczt::ParseError> {
+        self.into_parsed_with_version_domain::<orchard::note_encryption::OrchardDomain>(
+            bundle_version,
+        )
+    }
+
+    pub(crate) fn into_parsed_with_version_zsa(
+        self,
+        bundle_version: BundleVersion,
+    ) -> Result<orchard::pczt::Bundle<orchard::zsa::OrchardZSADomain>, orchard::pczt::ParseError> {
+        self.into_parsed_with_version_domain::<orchard::zsa::OrchardZSADomain>(
+            bundle_version,
+        )
+    }
+
+    fn into_parsed_with_version_domain<D: zcash_note_encryption::Domain>(
+        self,
+        bundle_version: BundleVersion,
+    ) -> Result<orchard::pczt::Bundle<D>, orchard::pczt::ParseError> {
         let note_version = self.note_version;
         let actions = self
             .actions
@@ -838,7 +856,7 @@ impl Bundle {
                     action.spend.proprietary,
                 )?;
 
-                let output = orchard::pczt::Output::parse(
+                let output = orchard::pczt::Output::<D>::parse(
                     *spend.nullifier(),
                     action.output.cmx,
                     action.output.ephemeral_key,
@@ -863,11 +881,11 @@ impl Bundle {
                     action.output.proprietary,
                 )?;
 
-                orchard::pczt::Action::parse(action.cv_net, spend, output, action.rcv)
+                orchard::pczt::Action::<D>::parse(action.cv_net, spend, output, action.rcv)
             })
             .collect::<Result<_, _>>()?;
 
-        orchard::pczt::Bundle::parse(
+        orchard::pczt::Bundle::<D>::parse(
             actions,
             self.flags,
             bundle_version,
