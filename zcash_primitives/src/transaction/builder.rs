@@ -1044,12 +1044,21 @@ impl<P: consensus::Parameters, U> Builder<P, U> {
             .orchard_builder
             .as_ref()
             .map_or(Ok(0), |builder| {
-                orchard_action_count(
+                let count = orchard_action_count(
                     builder,
                     self.build_config.is_coinbase(),
                     self.orchard_bundle_version
                         .expect("orchard builder present implies bundle version"),
-                )
+                )?;
+                #[cfg(feature = "tracing")]
+                tracing::info!(
+                    "get_fee: orchard raw(spends={} outputs={}) bundle_version={:?} => actions={}",
+                    builder.spends().len(),
+                    builder.outputs().len(),
+                    self.orchard_bundle_version,
+                    count,
+                );
+                Ok(count)
             })
             .map_err(FeeError::Bundle)?;
 
@@ -1087,6 +1096,18 @@ impl<P: consensus::Parameters, U> Builder<P, U> {
                 ironwood_actions + issue_actions,
             )
             .map_err(FeeError::FeeRule)?;
+
+        #[cfg(feature = "tracing")]
+        tracing::info!(
+            "get_fee: sapling(spends={} outputs={}) orchard(actions={}) ironwood+issue(actions={}) transparent(inputs={} outputs={}) => fee={}",
+            sapling_spends,
+            sapling_outputs,
+            orchard_actions,
+            ironwood_actions + issue_actions,
+            transparent_inputs.len(),
+            transparent_outputs.len(),
+            u64::from(fee),
+        );
 
         Ok(fee)
     }
