@@ -124,15 +124,24 @@ pub fn read_v6_bundle_zsa<R: Read>(
 }
 
 /// Writes an Orchard bundle in the ZSA V6 transaction format.
+///
+/// `raw_enc_ciphertexts` contains the full 612-byte ZSA enc_ciphertext per action
+/// (as captured during `read_v6_bundle_zsa`), or is empty if not available (e.g.
+/// from the PCZT extraction path). When available, these are used verbatim instead
+/// of zero-padding the 32-byte asset field.
 pub fn write_v6_bundle_zsa<W: Write>(
     mut writer: W,
     bundle: Option<&orchard::Bundle<Authorized, ZatBalance>>,
+    raw_enc_ciphertexts: &[Vec<u8>],
 ) -> io::Result<()> {
     if let Some(bundle) = bundle {
         CompactSize::write(&mut writer, 1usize)?; // nActionGroups
-        Vector::write_nonempty(&mut writer, bundle.actions(), |w, a| {
-            write_action_zsa(w, a)
-        })?;
+        // Write the CompactSize action count then each action
+        CompactSize::write(&mut writer, bundle.actions().len())?;
+        for (i, act) in bundle.actions().iter().enumerate() {
+            let raw_enc = raw_enc_ciphertexts.get(i).map(|v| v.as_slice());
+            write_action_zsa(&mut writer, act, raw_enc)?;
+        }
 
         let flags_byte = bundle.flags().to_byte(bundle.bundle_version()).ok_or_else(|| {
             io::Error::new(io::ErrorKind::InvalidData, "flags not encodable")
@@ -196,9 +205,16 @@ fn read_action_zsa<R: Read>(mut reader: R) -> io::Result<(orchard::Action<()>, V
 }
 
 /// Write a single ZSA action: cv+nf+rk+cmx+epk+enc612+out80
+///
+/// If `raw_enc_ciphertext` is provided (612 bytes from wire deserialization or
+/// PCZT extraction), it is written verbatim, preserving the encrypted asset field.
+/// Otherwise, the vanilla 580-byte ciphertext from the action is expanded with
+/// a zero-filled asset placeholder (correct for ZEC, but wrong for non-ZEC ZSA
+/// assets until the PCZT extraction path is updated to capture the raw bytes).
 fn write_action_zsa<W: Write>(
     mut writer: W,
     act: &orchard::Action<<Authorized as orchard::bundle::Authorization>::SpendAuth>,
+    raw_enc_ciphertext: Option<&[u8]>,
 ) -> io::Result<()> {
     super::orchard::write_value_commitment(&mut writer, act.cv_net())?;
     super::orchard::write_nullifier(&mut writer, act.nullifier())?;
@@ -206,12 +222,27 @@ fn write_action_zsa<W: Write>(
     super::orchard::write_cmx(&mut writer, act.cmx())?;
 
     let nc = act.encrypted_note();
-    // Vanilla enc_ciphertext layout: compact(52) + memo(512) + tag(16) = 580
-    // ZSA   enc_ciphertext layout: compact(52) + asset(32)  + memo(512) + tag(16) = 612
-    writer.write_all(&nc.epk_bytes)?;
-    writer.write_all(&nc.enc_ciphertext.as_ref()[..52])?; // compact vanilla (52)
-    writer.write_all(&[0u8; 32])?;                         // ZSA asset placeholder (32)
-    writer.write_all(&nc.enc_ciphertext.as_ref()[52..])?;  // memo(512) + tag(16)
-    writer.write_all(&nc.out_ciphertext)?;
+
+    if let Some(raw_enc) = raw_enc_ciphertext {
+        // Use the full 612-byte ZSA enc_ciphertext verbatim (includes
+        // the encrypted 32-byte asset). This path is used when the raw
+        // ciphertext was captured during wire deserialization or will be
+        // captured during PCZT extraction.
+        debug_assert_eq!(raw_enc.len(), 612, "ZSA raw enc_ciphertext must be 612 bytes");
+        writer.write_all(&nc.epk_bytes)?;
+        writer.write_all(raw_enc)?;
+        writer.write_all(&nc.out_ciphertext)?;
+    } else {
+        // Fallback: expand the vanilla 580-byte ciphertext with zero-filled
+        // asset placeholder. Correct for ZEC (asset = identity point) but
+        // wrong for non-ZEC ZSA assets.
+        //   Vanilla layout: compact(52) + memo(512) + tag(16) = 580
+        //   ZSA layout:     compact(52) + asset(32)  + memo(512) + tag(16) = 612
+        writer.write_all(&nc.epk_bytes)?;
+        writer.write_all(&nc.enc_ciphertext.as_ref()[..52])?; // compact vanilla (52)
+        writer.write_all(&[0u8; 32])?;                         // ZSA asset placeholder (32)
+        writer.write_all(&nc.enc_ciphertext.as_ref()[52..])?;  // memo(512) + tag(16)
+        writer.write_all(&nc.out_ciphertext)?;
+    }
     Ok(())
 }

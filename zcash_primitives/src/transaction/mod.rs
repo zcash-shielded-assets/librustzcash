@@ -1316,7 +1316,11 @@ impl Transaction {
 
         self.write_transparent(&mut writer)?;
         sapling_serialization::write_v6_bundle(&mut writer, self.sapling_bundle.as_ref())?;
-        components::orchard_zsa::write_v6_bundle_zsa(&mut writer, self.orchard_bundle.as_ref())?;
+        components::orchard_zsa::write_v6_bundle_zsa(
+            &mut writer,
+            self.orchard_bundle.as_ref(),
+            &self.zsa_action_enc_ciphertexts,
+        )?;
         issuance::write_bundle(self.issue_bundle.as_ref(), &mut writer)?;
 
         Ok(())

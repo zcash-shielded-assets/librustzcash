@@ -439,10 +439,38 @@ pub struct PcztParts<P: Parameters> {
     pub expiry_height: BlockHeight,
     pub transparent: Option<transparent::pczt::Bundle>,
     pub sapling: Option<sapling::pczt::Bundle>,
-    pub orchard: Option<orchard::pczt::Bundle>,
+    pub orchard: Option<OrchardPcztBundle>,
     pub ironwood: Option<orchard::pczt::Bundle>,
     #[cfg(feature = "zsa")]
     pub issuance_builder: Option<crate::transaction::zsa_builder::ZsaBuilder>,
+}
+
+/// The Orchard-pool PCZT bundle produced by [`Builder::build_for_pczt`], tagged with the
+/// note-encryption domain selected for the transaction's Orchard pool.
+///
+/// Pre-Nu7 Orchard bundles use [`orchard::note_encryption::OrchardDomain`] (580-byte
+/// `enc_ciphertext`); Nu7/ZSA bundles use [`orchard::zsa::OrchardZSADomain`] (612-byte
+/// `enc_ciphertext`, including the encrypted asset). Carrying the domain through the PCZT is
+/// what keeps the in-memory bundle, the transaction sighash, and the wire serialization all in
+/// the same (ZSA) form, so the signatures computed over the sighash verify against the wire.
+#[derive(Debug)]
+pub enum OrchardPcztBundle {
+    /// A pre-Nu7 Orchard bundle (`OrchardDomain`, 580-byte ciphertexts).
+    Vanilla(orchard::pczt::Bundle),
+    /// A Nu7/ZSA Orchard bundle (`OrchardZSADomain`, 612-byte ciphertexts).
+    #[cfg(feature = "zsa")]
+    Zsa(orchard::pczt::Bundle<orchard::zsa::OrchardZSADomain>),
+}
+
+/// Returns `true` if the given Orchard bundle version is the ZSA (Nu7) version, which selects
+/// the 612-byte [`orchard::zsa::OrchardZSADomain`] note-encryption domain.
+#[cfg(feature = "zsa")]
+fn orchard_bundle_is_zsa(v: Option<orchard::bundle::BundleVersion>) -> bool {
+    v == Some(orchard::bundle::BundleVersion::orchard_zsa())
+}
+#[cfg(not(feature = "zsa"))]
+fn orchard_bundle_is_zsa(_v: Option<orchard::bundle::BundleVersion>) -> bool {
+    false
 }
 
 /// Generates a [`Transaction`] from its inputs and outputs.
@@ -1458,17 +1486,34 @@ impl<P: consensus::Parameters, U> Builder<P, U> {
             None => (None, SaplingMetadata::empty()),
         };
 
-        let (orchard_bundle, orchard_meta) = match self
-            .orchard_builder
-            .map(|builder| {
-                builder
-                    .build_for_pczt(&mut rng)
-                    .map_err(Error::OrchardBuild)
-            })
-            .transpose()?
-        {
-            Some((bundle, meta)) => (Some(bundle), meta),
+        // Nu7/ZSA Orchard bundles must be built under `OrchardZSADomain` so that the
+        // `enc_ciphertext` is the 612-byte ZSA form (with the encrypted asset). Accumulation
+        // happens under the default `OrchardDomain`; we re-parameterize the builder here, just
+        // before encryption, when the bundle version is ZSA.
+        let orchard_is_zsa = orchard_bundle_is_zsa(self.orchard_bundle_version);
+        let (orchard_bundle, orchard_meta) = match self.orchard_builder {
             None => (None, orchard::builder::BundleMetadata::empty()),
+            Some(builder) => {
+                if orchard_is_zsa {
+                    #[cfg(feature = "zsa")]
+                    {
+                        let (bundle, meta) = builder
+                            .into_domain::<orchard::zsa::OrchardZSADomain>()
+                            .build_for_pczt(&mut rng)
+                            .map_err(Error::OrchardBuild)?;
+                        (Some(OrchardPcztBundle::Zsa(bundle)), meta)
+                    }
+                    #[cfg(not(feature = "zsa"))]
+                    {
+                        unreachable!("a ZSA Orchard bundle version requires the `zsa` feature")
+                    }
+                } else {
+                    let (bundle, meta) = builder
+                        .build_for_pczt(&mut rng)
+                        .map_err(Error::OrchardBuild)?;
+                    (Some(OrchardPcztBundle::Vanilla(bundle)), meta)
+                }
+            }
         };
 
         // The Ironwood bundle is only carried by V6 transactions; for any other version it is

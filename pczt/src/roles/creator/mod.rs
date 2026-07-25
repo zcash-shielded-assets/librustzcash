@@ -306,7 +306,15 @@ impl Creator {
                 .unwrap_or(crate::sapling::EMPTY_BUNDLE),
             orchard: parts
                 .orchard
-                .map(OrchardBundle::serialize_from)
+                .map(|b| match b {
+                    zcash_primitives::transaction::builder::OrchardPcztBundle::Vanilla(bundle) => {
+                        OrchardBundle::serialize_from(bundle)
+                    }
+                    #[cfg(feature = "zsa")]
+                    zcash_primitives::transaction::builder::OrchardPcztBundle::Zsa(bundle) => {
+                        OrchardBundle::serialize_from(bundle)
+                    }
+                })
                 .unwrap_or(crate::orchard::EMPTY_ORCHARD),
             ironwood: parts
                 .ironwood

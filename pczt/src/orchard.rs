@@ -878,7 +878,9 @@ impl Bundle {
         )
     }
 
-    pub(crate) fn serialize_from(bundle: orchard::pczt::Bundle) -> Self {
+    pub(crate) fn serialize_from<D: zcash_note_encryption::Domain>(
+        bundle: orchard::pczt::Bundle<D>,
+    ) -> Self {
         let note_version = bundle.bundle_version().note_version();
 
         assert!(
