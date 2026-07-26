@@ -66,7 +66,7 @@ redjubjub = { version = "0.8", default-features = false }
 sapling = { package = "sapling-crypto", version = "0.7", default-features = false }
 
 # - Orchard
-orchard = { path = "/Users/hanh/projects/zsa/orchard", default-features = false }
+orchard = { git = "https://github.com/zcash-shielded-assets/orchard.git", rev = "8c1c9beeeeeefb56fa309f56062b82feb70bb1d4", default-features = false }
 pasta_curves = "0.5"
 
 # - Transparent
