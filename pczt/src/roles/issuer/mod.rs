@@ -252,7 +252,7 @@ fn deserialize_bundle(wire: &crate::issue::Bundle) -> Option<IssueBundle<orchard
                     let asset = AssetBase::from_bytes(&n.asset).into_option()?;
                     let rho = Rho::from_bytes(&n.rho).into_option()?;
                     let rseed = RandomSeed::from_bytes(n.rseed, &rho).into_option()?;
-                    Note::from_parts(recipient, orchard::value::NoteValue::from_raw(n.value), asset, rho, rseed, orchard::NoteVersion::V2).into_option()
+                    Note::from_parts(recipient, orchard::value::NoteValue::from_raw(n.value), asset, rho, rseed, orchard::NoteVersion::V3ZSA).into_option()
                 })
                 .collect::<Option<Vec<_>>>()?;
             let flags = IssuanceFlags::from_byte(a.flags)?;

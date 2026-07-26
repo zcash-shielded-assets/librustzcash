@@ -7243,6 +7243,7 @@ dependencies = [
  "sapling-crypto",
  "secp256k1",
  "sha2 0.10.9",
+ "tracing",
  "zcash_encoding",
  "zcash_note_encryption",
  "zcash_protocol",

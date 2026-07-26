@@ -283,10 +283,14 @@ pub mod v2 {
 
     #[cfg(test)]
     mod tests {
+        use alloc::{collections::BTreeMap, vec};
         use zcash_protocol::consensus::BranchId;
 
         use super::Pczt;
-        use crate::{orchard::NoteVersion, roles::creator::Creator};
+        use crate::{
+            orchard::{Action, NoteVersion, Output, Spend},
+            roles::creator::Creator,
+        };
 
         #[test]
         fn empty_bundles_encode_as_none_and_decode_as_empty() {
@@ -355,6 +359,66 @@ pub mod v2 {
             assert_eq!(decoded.orchard, pczt.orchard);
             assert_eq!(decoded.orchard.flags, 0);
             assert_eq!(decoded.orchard.note_version, NoteVersion::V3);
+        }
+
+        #[test]
+        fn zsa_assets_and_note_version_survive_round_trip() {
+            let spend_asset = [7; 32];
+            let output_asset = [9; 32];
+            let rseed_split_note = [11; 32];
+            let mut pczt =
+                Creator::new(BranchId::Nu7.into(), 10_000_000, 133, [0; 32], [0; 32])
+                    .expect("NU7 is supported")
+                    .build();
+            pczt.orchard.actions.push(Action {
+                cv_net: [0; 32],
+                spend: Spend {
+                    nullifier: [0; 32],
+                    rk: [0; 32],
+                    spend_auth_sig: None,
+                    recipient: None,
+                    value: Some(12),
+                    rho: None,
+                    rseed: None,
+                    rseed_split_note: Some(rseed_split_note),
+                    fvk: None,
+                    witness: None,
+                    alpha: None,
+                    zip32_derivation: None,
+                    dummy_sk: None,
+                    proprietary: BTreeMap::new(),
+                    asset: Some(spend_asset),
+                },
+                output: Output {
+                    cmx: [0; 32],
+                    ephemeral_key: [0; 32],
+                    enc_ciphertext: vec![],
+                    out_ciphertext: vec![],
+                    recipient: None,
+                    value: Some(10),
+                    rseed: None,
+                    ock: None,
+                    zip32_derivation: None,
+                    user_address: None,
+                    proprietary: BTreeMap::new(),
+                    asset: Some(output_asset),
+                },
+                rcv: None,
+            });
+
+            let encoded = Pczt::try_from(pczt)
+                .expect("ZSA PCZT encodes")
+                .serialize();
+            let decoded = crate::parse(&encoded).expect("ZSA PCZT decodes");
+            let action = &decoded.orchard.actions[0];
+
+            assert_eq!(decoded.orchard.note_version, NoteVersion::V3ZSA);
+            assert_eq!(action.spend.asset, Some(spend_asset));
+            assert_eq!(
+                action.spend.rseed_split_note,
+                Some(rseed_split_note)
+            );
+            assert_eq!(action.output.asset, Some(output_asset));
         }
     }
 }

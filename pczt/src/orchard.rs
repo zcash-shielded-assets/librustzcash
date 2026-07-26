@@ -136,6 +136,7 @@ pub struct Action {
     ///
     /// This opens `cv` for all participants. For Signers who don't need this information,
     /// or after proofs / signatures have been applied, this can be redacted.
+    #[getset(get = "pub")]
     pub(crate) rcv: Option<[u8; 32]>,
 }
 
@@ -175,6 +176,7 @@ pub struct Spend {
     ///
     /// This exposes the input value to all participants. For Signers who don't need this
     /// information, or after signatures have been applied, this can be redacted.
+    #[getset(get = "pub")]
     pub(crate) value: Option<u64>,
 
     /// The rho value for the note being spent.
@@ -188,6 +190,11 @@ pub struct Spend {
     /// - This is set by the Constructor.
     /// - This is required by the Prover.
     pub(crate) rseed: Option<[u8; 32]>,
+
+    /// The alternate seed used to derive the nullifier of a ZSA split note.
+    ///
+    /// Presence of this field marks this as a split spend.
+    pub(crate) rseed_split_note: Option<[u8; 32]>,
 
     /// The full viewing key that received the note being spent.
     ///
@@ -223,6 +230,13 @@ pub struct Spend {
     /// Proprietary fields related to the note being spent.
     #[getset(get = "pub")]
     pub(crate) proprietary: BTreeMap<String, Vec<u8>>,
+
+    /// The asset base of the note being spent. Required for NU7 actions,
+    /// including native ZEC; older Orchard actions may omit it.
+    ///
+    /// Required by Verifiers/Provers to reconstruct the ZSA note commitment.
+    #[getset(get = "pub")]
+    pub(crate) asset: Option<[u8; 32]>,
 }
 
 /// Information about the output part of an Orchard action.
@@ -300,6 +314,13 @@ pub struct Output {
     /// Proprietary fields related to the note being created.
     #[getset(get = "pub")]
     pub(crate) proprietary: BTreeMap<String, Vec<u8>>,
+
+    /// The asset base of the output note. Required for NU7 actions,
+    /// including native ZEC; older Orchard actions may omit it.
+    ///
+    /// Required by Provers to reconstruct the ZSA note commitment.
+    #[getset(get = "pub")]
+    pub(crate) asset: Option<[u8; 32]>,
 }
 
 /// Types for the v1 Orchard PCZT encoding.
@@ -348,6 +369,7 @@ pub mod v1 {
         value: Option<u64>,
         rho: Option<[u8; 32]>,
         rseed: Option<[u8; 32]>,
+        rseed_split_note: Option<[u8; 32]>,
         #[serde_as(as = "Option<[_; 96]>")]
         fvk: Option<[u8; 96]>,
         witness: Option<(u32, [[u8; 32]; 32])>,
@@ -355,6 +377,7 @@ pub mod v1 {
         zip32_derivation: Option<Zip32Derivation>,
         dummy_sk: Option<[u8; 32]>,
         proprietary: BTreeMap<String, Vec<u8>>,
+        asset: Option<[u8; 32]>,
     }
 
     /// Information about the output part of an Orchard action.
@@ -373,6 +396,7 @@ pub mod v1 {
         zip32_derivation: Option<Zip32Derivation>,
         user_address: Option<String>,
         proprietary: BTreeMap<String, Vec<u8>>,
+        asset: Option<[u8; 32]>,
     }
 
     impl TryFrom<super::Bundle> for Bundle {
@@ -444,12 +468,14 @@ pub mod v1 {
                 value: spend.value,
                 rho: spend.rho,
                 rseed: spend.rseed,
+                rseed_split_note: spend.rseed_split_note,
                 fvk: spend.fvk,
                 witness: spend.witness,
                 alpha: spend.alpha,
                 zip32_derivation: spend.zip32_derivation,
                 dummy_sk: spend.dummy_sk,
                 proprietary: spend.proprietary,
+                asset: spend.asset,
             }
         }
     }
@@ -464,12 +490,14 @@ pub mod v1 {
                 value: spend.value,
                 rho: spend.rho,
                 rseed: spend.rseed,
+                rseed_split_note: spend.rseed_split_note,
                 fvk: spend.fvk,
                 witness: spend.witness,
                 alpha: spend.alpha,
                 zip32_derivation: spend.zip32_derivation,
                 dummy_sk: spend.dummy_sk,
                 proprietary: spend.proprietary,
+                asset: spend.asset,
             }
         }
     }
@@ -488,6 +516,7 @@ pub mod v1 {
                 zip32_derivation: output.zip32_derivation,
                 user_address: output.user_address,
                 proprietary: output.proprietary,
+                asset: output.asset,
             }
         }
     }
@@ -506,6 +535,7 @@ pub mod v1 {
                 zip32_derivation: output.zip32_derivation,
                 user_address: output.user_address,
                 proprietary: output.proprietary,
+                asset: output.asset,
             }
         }
     }
@@ -525,13 +555,15 @@ pub(crate) mod v2 {
     enum SerializedNoteVersion {
         V2,
         V3,
+        V3Zsa,
     }
 
     impl From<NoteVersion> for SerializedNoteVersion {
         fn from(note_version: NoteVersion) -> Self {
             match note_version {
                 NoteVersion::V2 => Self::V2,
-                NoteVersion::V3 | NoteVersion::V3ZSA => Self::V3,
+                NoteVersion::V3 => Self::V3,
+                NoteVersion::V3ZSA => Self::V3Zsa,
             }
         }
     }
@@ -541,6 +573,7 @@ pub(crate) mod v2 {
             match note_version {
                 SerializedNoteVersion::V2 => Self::V2,
                 SerializedNoteVersion::V3 => Self::V3,
+                SerializedNoteVersion::V3Zsa => Self::V3ZSA,
             }
         }
     }
@@ -693,12 +726,14 @@ impl Bundle {
                         value,
                         rho,
                         rseed,
+                        rseed_split_note,
                         fvk,
                         witness,
                         alpha,
                         zip32_derivation: spend_zip32_derivation,
                         dummy_sk,
                         proprietary: spend_proprietary,
+                        asset: spend_asset,
                     },
                 output:
                     Output {
@@ -713,6 +748,7 @@ impl Bundle {
                         zip32_derivation: output_zip32_derivation,
                         user_address,
                         proprietary: output_proprietary,
+                        asset: output_asset,
                     },
                 rcv,
             } = rhs;
@@ -733,12 +769,14 @@ impl Bundle {
                 && merge_optional(&mut lhs.spend.value, value)
                 && merge_optional(&mut lhs.spend.rho, rho)
                 && merge_optional(&mut lhs.spend.rseed, rseed)
+                && merge_optional(&mut lhs.spend.rseed_split_note, rseed_split_note)
                 && merge_optional(&mut lhs.spend.fvk, fvk)
                 && merge_optional(&mut lhs.spend.witness, witness)
                 && merge_optional(&mut lhs.spend.alpha, alpha)
                 && merge_optional(&mut lhs.spend.zip32_derivation, spend_zip32_derivation)
                 && merge_optional(&mut lhs.spend.dummy_sk, dummy_sk)
                 && merge_map(&mut lhs.spend.proprietary, spend_proprietary)
+                && merge_optional(&mut lhs.spend.asset, spend_asset)
                 && merge_optional(&mut lhs.output.recipient, output_recipient)
                 && merge_optional(&mut lhs.output.value, output_value)
                 && merge_optional(&mut lhs.output.rseed, output_rseed)
@@ -746,6 +784,7 @@ impl Bundle {
                 && merge_optional(&mut lhs.output.zip32_derivation, output_zip32_derivation)
                 && merge_optional(&mut lhs.output.user_address, user_address)
                 && merge_map(&mut lhs.output.proprietary, output_proprietary)
+                && merge_optional(&mut lhs.output.asset, output_asset)
                 && merge_optional(&mut lhs.rcv, rcv))
             {
                 return None;
@@ -812,75 +851,6 @@ impl Bundle {
         )
     }
 
-    /// Like `into_parsed_with_version` but handles both 580-byte (vanilla) and
-    /// 612-byte (ZSA) `enc_ciphertext` inputs by stripping the 32-byte encrypted
-    /// asset when present. The resulting PCZT bundle always uses vanilla
-    /// `OrchardDomain` (580-byte ciphertexts). This is a temporary bridge until
-    /// the full PCZT pipeline supports `OrchardZSADomain`.
-    pub(crate) fn into_parsed_stripping_zsa(
-        self,
-        bundle_version: BundleVersion,
-    ) -> Result<orchard::pczt::Bundle, orchard::pczt::ParseError> {
-        let note_version = self.note_version;
-        let actions = self
-            .actions
-            .into_iter()
-            .map(|action| {
-                let spend = orchard::pczt::Spend::parse(
-                    action.spend.nullifier,
-                    action.spend.rk,
-                    action.spend.spend_auth_sig,
-                    action.spend.recipient,
-                    action.spend.value,
-                    action.spend.rho,
-                    action.spend.rseed,
-                    action.spend.fvk,
-                    action.spend.witness,
-                    action.spend.alpha,
-                    action.spend.zip32_derivation.map(|z| {
-                        orchard::pczt::Zip32Derivation::parse(z.seed_fingerprint, z.derivation_path)
-                    }).transpose()?,
-                    action.spend.dummy_sk,
-                    note_version,
-                    action.spend.proprietary,
-                )?;
-                // Strip 32-byte ZSA asset field if present (612 → 580 bytes)
-                let enc_ciphertext = if action.output.enc_ciphertext.len() == 612 {
-                    let mut v = vec![0u8; 580];
-                    v[..52].copy_from_slice(&action.output.enc_ciphertext[..52]);
-                    v[52..].copy_from_slice(&action.output.enc_ciphertext[84..]);
-                    v
-                } else {
-                    action.output.enc_ciphertext
-                };
-                let output = orchard::pczt::Output::<orchard::note_encryption::OrchardDomain>::parse(
-                    *spend.nullifier(),
-                    action.output.cmx,
-                    action.output.ephemeral_key,
-                    enc_ciphertext,
-                    action.output.out_ciphertext,
-                    action.output.recipient,
-                    action.output.value,
-                    action.output.rseed,
-                    action.output.ock,
-                    action.output.zip32_derivation.map(|z| {
-                        orchard::pczt::Zip32Derivation::parse(z.seed_fingerprint, z.derivation_path)
-                    }).transpose()?,
-                    action.output.user_address,
-                    note_version,
-                    action.output.proprietary,
-                )?;
-                orchard::pczt::Action::<orchard::note_encryption::OrchardDomain>::parse(
-                    action.cv_net, spend, output, action.rcv,
-                )
-            })
-            .collect::<Result<_, _>>()?;
-        orchard::pczt::Bundle::<orchard::note_encryption::OrchardDomain>::parse(
-            actions, self.flags, bundle_version, self.value_sum, self.anchor,
-            self.zkproof, self.bsk,
-        )
-    }
-
     pub(crate) fn into_parsed_with_version_zsa(
         self,
         bundle_version: BundleVersion,
@@ -907,6 +877,7 @@ impl Bundle {
                     action.spend.value,
                     action.spend.rho,
                     action.spend.rseed,
+                    action.spend.rseed_split_note,
                     action.spend.fvk,
                     action.spend.witness,
                     action.spend.alpha,
@@ -923,6 +894,7 @@ impl Bundle {
                     action.spend.dummy_sk,
                     note_version,
                     action.spend.proprietary,
+                    action.spend.asset,
                 )?;
 
                 let output = orchard::pczt::Output::<D>::parse(
@@ -948,6 +920,7 @@ impl Bundle {
                     action.output.user_address,
                     note_version,
                     action.output.proprietary,
+                    action.output.asset,
                 )?;
 
                 orchard::pczt::Action::<D>::parse(action.cv_net, spend, output, action.rcv)
@@ -1028,6 +1001,10 @@ impl Bundle {
                             .dummy_sk()
                             .map(|dummy_sk| *dummy_sk.to_bytes()),
                         proprietary: spend.proprietary().clone(),
+                        asset: spend.asset().map(|a| a.to_bytes()),
+                        rseed_split_note: spend
+                            .rseed_split_note()
+                            .map(|rseed| *rseed.as_bytes()),
                     },
                     output: Output {
                         cmx: output.cmx().to_bytes(),
@@ -1053,6 +1030,7 @@ impl Bundle {
                         }),
                         user_address: output.user_address().clone(),
                         proprietary: output.proprietary().clone(),
+                        asset: output.asset().map(|a| a.to_bytes()),
                     },
                     rcv: action.rcv().as_ref().map(|rcv| rcv.to_bytes()),
                 }

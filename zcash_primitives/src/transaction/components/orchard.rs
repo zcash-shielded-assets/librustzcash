@@ -389,9 +389,12 @@ pub mod testing {
         Authorized, Bundle, BundleVersion, Flags,
         testing::{self as t_orch},
     };
-    use zcash_protocol::value::{ZatBalance, testing::arb_zat_balance};
+    use zcash_protocol::{
+        consensus::BranchId,
+        value::{ZatBalance, testing::arb_zat_balance},
+    };
 
-    use crate::transaction::TxVersion;
+    use crate::transaction::{OrchardBundle, TxVersion};
 
     prop_compose! {
         pub fn arb_bundle(n_actions: usize)(
@@ -404,10 +407,17 @@ pub mod testing {
         }
     }
 
-    pub fn arb_bundle_for_version(
+    pub fn arb_bundle_for_branch(
         v: TxVersion,
-    ) -> impl Strategy<Value = Option<Bundle<Authorized, ZatBalance>>> {
-        if v.has_orchard() {
+        branch_id: BranchId,
+    ) -> impl Strategy<Value = Option<OrchardBundle<Authorized>>> {
+        if branch_id == BranchId::Nu7 {
+            // The existing arbitrary-action generator produces OrchardDomain
+            // ciphertexts. Do not mislabel those as OrchardZSADomain bundles.
+            // A domain-correct ZSA action generator can replace this empty
+            // strategy when one is available.
+            Just(()).prop_map(|()| None).boxed()
+        } else if v.has_orchard() {
             // The Orchard slot uses `orchard_v3()` in a v6 transaction (cross-address forbidden)
             // and `orchard_v2()` in a v5 transaction; the Ironwood slot is generated separately by
             // `arb_ironwood_bundle_for_version`.
@@ -415,12 +425,14 @@ pub mod testing {
             (1usize..100)
                 .prop_flat_map(move |n| {
                     prop::option::of(
-                        arb_bundle(n).prop_map(move |b| rebuild_with_version(b, bundle_version)),
+                        arb_bundle(n).prop_map(move |b| {
+                            OrchardBundle::OrchardVanilla(rebuild_with_version(b, bundle_version))
+                        }),
                     )
                 })
                 .boxed()
         } else {
-            Just(None).boxed()
+            Just(()).prop_map(|()| None).boxed()
         }
     }
 

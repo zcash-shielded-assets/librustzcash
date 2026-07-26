@@ -132,7 +132,7 @@ impl<A: orchard::bundle::Authorization> OrchardBundle<A> {
     pub fn map_authorization<R, B: orchard::bundle::Authorization>(
         self,
         context: &mut R,
-        mut spend_auth: impl FnMut(
+        spend_auth: impl FnMut(
             &mut R,
             &A,
             <A as orchard::bundle::Authorization>::SpendAuth,
@@ -1624,7 +1624,7 @@ pub mod testing {
             expiry_height in any::<u32>(),
             transparent_bundle in transparent::arb_bundle(),
             sapling_bundle in sapling::arb_bundle_for_version(version),
-            orchard_bundle in orchard::arb_bundle_for_version(version),
+            orchard_bundle in orchard::arb_bundle_for_branch(version, consensus_branch_id),
             ironwood_bundle in orchard::arb_ironwood_bundle_for_version(version),
             version in Just(version),
         ) -> TransactionData<Authorized> {
@@ -1654,7 +1654,7 @@ pub mod testing {
             zip233_amount in 0..=MAX_MONEY,
             transparent_bundle in transparent::arb_bundle(),
             sapling_bundle in sapling::arb_bundle_for_version(version),
-            orchard_bundle in orchard::arb_bundle_for_version(version),
+            orchard_bundle in orchard::arb_bundle_for_branch(version, consensus_branch_id),
             ironwood_bundle in orchard::arb_ironwood_bundle_for_version(version),
             version in Just(version),
         ) -> TransactionData<Authorized> {

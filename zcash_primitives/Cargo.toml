@@ -35,6 +35,7 @@ sha2.workspace = true
 
 # - Logging and metrics
 memuse.workspace = true
+tracing = { workspace = true, optional = true }
 
 # - Shielded protocols
 ff.workspace = true
@@ -142,6 +143,9 @@ no-expensive-tests = []
 ## A feature that provides `FeeRule` implementations and constructors for
 ## non-standard fees.
 non-standard-fees = []
+
+## Enables internal tracing instrumentation.
+tracing = ["dep:tracing"]
 
 [lib]
 bench = false

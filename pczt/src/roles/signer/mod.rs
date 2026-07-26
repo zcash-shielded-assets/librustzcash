@@ -373,6 +373,10 @@ impl Signer {
             r => r,
         }
         .map_err(Error::OrchardVerify)?;
+        action
+            .output()
+            .verify_note_commitment(action.spend())
+            .map_err(Error::OrchardVerify)?;
         if let Some(sig) = sig {
             action.apply_signature(shielded_sighash, sig).map_err(Error::OrchardSign)?;
         } else {

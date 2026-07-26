@@ -111,7 +111,7 @@ fn to_issue_bundle<T: orchard::issuance::IssueAuth>(
             let asset = AssetBase::from_bytes(&n.asset).into_option()?;
             let rho = Rho::from_bytes(&n.rho).into_option()?;
             let rseed = RandomSeed::from_bytes(n.rseed, &rho).into_option()?;
-            orchard::Note::from_parts(recipient, orchard::value::NoteValue::from_raw(n.value), asset, rho, rseed, orchard::NoteVersion::V2).into_option()
+            orchard::Note::from_parts(recipient, orchard::value::NoteValue::from_raw(n.value), asset, rho, rseed, orchard::NoteVersion::V3ZSA).into_option()
         }).collect();
         let flags = IssuanceFlags::from_byte(a.flags)?;
         Some(IssueAction::from_parts(a.asset_desc_hash, notes?, flags.finalize()))

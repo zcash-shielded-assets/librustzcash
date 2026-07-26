@@ -101,7 +101,7 @@ pub fn read_note<R: Read>(mut reader: R, asset: AssetBase) -> io::Result<Note> {
         asset,
         rho,
         rseed,
-        orchard::NoteVersion::V3,
+        orchard::NoteVersion::V3ZSA,
     ))
     .ok_or(Error::new(ErrorKind::InvalidData, "Invalid note"))
 }
