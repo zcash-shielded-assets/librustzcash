@@ -11,7 +11,8 @@ impl super::Verifier {
             transparent,
             sapling,
             orchard,
-            ironwood, ..
+            ironwood,
+            issue,
         } = self.pczt;
 
         let bundle = orchard
@@ -30,7 +31,46 @@ impl super::Verifier {
                 sapling,
                 orchard: crate::orchard::Bundle::serialize_from(bundle),
                 ironwood,
-                issue: Default::default(),
+                issue,
+            },
+        })
+    }
+
+    /// Parses an NU7 Orchard bundle with the ZSA note-encryption domain and
+    /// then verifies it in the given closure.
+    #[cfg(feature = "zsa")]
+    pub fn with_orchard_zsa<E, F>(self, f: F) -> Result<Self, OrchardError<E>>
+    where
+        F: FnOnce(
+            &orchard::pczt::Bundle<orchard::zsa::OrchardZSADomain>,
+        ) -> Result<(), OrchardError<E>>,
+    {
+        let Pczt {
+            global,
+            transparent,
+            sapling,
+            orchard,
+            ironwood,
+            issue,
+        } = self.pczt;
+
+        let bundle = orchard
+            .into_parsed_with_version_zsa(
+                crate::orchard::orchard_bundle_version(&global)
+                    .ok_or(OrchardError::UnsupportedConsensusBranchId)?,
+            )
+            .map_err(OrchardError::Parse)?;
+
+        f(&bundle)?;
+
+        Ok(Self {
+            pczt: Pczt {
+                global,
+                transparent,
+                sapling,
+                orchard: crate::orchard::Bundle::serialize_from(bundle),
+                ironwood,
+                issue,
             },
         })
     }
@@ -45,7 +85,8 @@ impl super::Verifier {
             transparent,
             sapling,
             orchard,
-            ironwood, ..
+            ironwood,
+            issue,
         } = self.pczt;
 
         let bundle = ironwood
@@ -61,7 +102,7 @@ impl super::Verifier {
                 sapling,
                 orchard,
                 ironwood: crate::orchard::Bundle::serialize_from(bundle),
-                issue: Default::default(),
+                issue,
             },
         })
     }

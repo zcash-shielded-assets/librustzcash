@@ -38,6 +38,42 @@ impl super::Updater {
         })
     }
 
+    /// Updates an NU7 Orchard bundle using the ZSA note-encryption domain.
+    #[cfg(feature = "zsa")]
+    pub fn update_orchard_zsa_with<F>(self, f: F) -> Result<Self, OrchardError>
+    where
+        F: FnOnce(Updater<'_, orchard::zsa::OrchardZSADomain>) -> Result<(), UpdaterError>,
+    {
+        let Pczt {
+            global,
+            transparent,
+            sapling,
+            orchard,
+            ironwood,
+            issue,
+        } = self.pczt;
+
+        let mut bundle = orchard
+            .into_parsed_with_version_zsa(
+                crate::orchard::orchard_bundle_version(&global)
+                    .ok_or(OrchardError::UnsupportedConsensusBranchId)?,
+            )
+            .map_err(OrchardError::Parser)?;
+
+        bundle.update_with(f).map_err(OrchardError::Updater)?;
+
+        Ok(Self {
+            pczt: Pczt {
+                global,
+                transparent,
+                sapling,
+                orchard: crate::orchard::Bundle::serialize_from(bundle),
+                ironwood,
+                issue,
+            },
+        })
+    }
+
     /// Updates the Ironwood bundle with information in the given closure.
     pub fn update_ironwood_with<F>(self, f: F) -> Result<Self, OrchardError>
     where
