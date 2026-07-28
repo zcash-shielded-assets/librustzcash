@@ -71,16 +71,15 @@ impl Bundle {
     /// (stored by the Issuer's sign phase).
     ///
     /// Returns `None` if the wire data is empty, invalid, or missing a signature.
-    pub fn to_signed(
-        &self,
-    ) -> Option<orchard::issuance::IssueBundle<orchard::issuance::Signed>> {
+    pub fn to_signed(&self) -> Option<orchard::issuance::IssueBundle<orchard::issuance::Signed>> {
         use orchard::issuance::auth::IssueAuthSig;
         use orchard::issuance::sighash_kind::{BIP340IssueAuthSig, IssueSighashKind};
         let sig_bytes = self.actions.first()?.sig_bytes.clone();
         if sig_bytes.is_empty() {
             return None;
         }
-        let auth_sig = IssueAuthSig::<orchard::issuance::auth::ZSASchnorr>::decode(&sig_bytes).ok()?;
+        let auth_sig =
+            IssueAuthSig::<orchard::issuance::auth::ZSASchnorr>::decode(&sig_bytes).ok()?;
         let sig = BIP340IssueAuthSig::new(IssueSighashKind::AllEffecting, auth_sig);
         let auth = orchard::issuance::Signed::new(sig);
         to_issue_bundle(self, auth)
@@ -93,29 +92,47 @@ fn to_issue_bundle<T: orchard::issuance::IssueAuth>(
     wire: &Bundle,
     auth: T,
 ) -> Option<orchard::issuance::IssueBundle<T>> {
-    use orchard::issuance::{
-        IssueAction, IssueBundle, IssuanceFlags,
-        auth::IssueValidatingKey,
-    };
-    use orchard::note::{AssetBase, RandomSeed, Rho};
     use nonempty::NonEmpty;
+    use orchard::issuance::{IssuanceFlags, IssueAction, IssueBundle, auth::IssueValidatingKey};
+    use orchard::note::{AssetBase, RandomSeed, Rho};
 
     if wire.actions.is_empty() {
         return None;
     }
 
     let ik = IssueValidatingKey::<orchard::issuance::auth::ZSASchnorr>::from_bytes(&wire.ik)?;
-    let actions: Option<Vec<IssueAction>> = wire.actions.iter().map(|a| {
-        let notes: Option<Vec<orchard::Note>> = a.notes.iter().map(|n| {
-            let recipient = orchard::Address::from_raw_address_bytes(&n.recipient).into_option()?;
-            let asset = AssetBase::from_bytes(&n.asset).into_option()?;
-            let rho = Rho::from_bytes(&n.rho).into_option()?;
-            let rseed = RandomSeed::from_bytes(n.rseed, &rho).into_option()?;
-            orchard::Note::from_parts(recipient, orchard::value::NoteValue::from_raw(n.value), asset, rho, rseed, orchard::NoteVersion::V3ZSA).into_option()
-        }).collect();
-        let flags = IssuanceFlags::from_byte(a.flags)?;
-        Some(IssueAction::from_parts(a.asset_desc_hash, notes?, flags.finalize()))
-    }).collect();
+    let actions: Option<Vec<IssueAction>> = wire
+        .actions
+        .iter()
+        .map(|a| {
+            let notes: Option<Vec<orchard::Note>> = a
+                .notes
+                .iter()
+                .map(|n| {
+                    let recipient =
+                        orchard::Address::from_raw_address_bytes(&n.recipient).into_option()?;
+                    let asset = AssetBase::from_bytes(&n.asset).into_option()?;
+                    let rho = Rho::from_bytes(&n.rho).into_option()?;
+                    let rseed = RandomSeed::from_bytes(n.rseed, &rho).into_option()?;
+                    orchard::Note::from_parts(
+                        recipient,
+                        orchard::value::NoteValue::from_raw(n.value),
+                        asset,
+                        rho,
+                        rseed,
+                        orchard::NoteVersion::V3ZSA,
+                    )
+                    .into_option()
+                })
+                .collect();
+            let flags = IssuanceFlags::from_byte(a.flags)?;
+            Some(IssueAction::from_parts(
+                a.asset_desc_hash,
+                notes?,
+                flags.finalize(),
+            ))
+        })
+        .collect();
     let actions = NonEmpty::from_vec(actions?)?;
     Some(IssueBundle::from_parts(ik, actions, auth))
 }

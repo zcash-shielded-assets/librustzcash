@@ -1,6 +1,6 @@
-use orchard::pczt::{ParseError, Updater, UpdaterError};
+use orchard::pczt::{Updater, UpdaterError};
 
-use crate::Pczt;
+use crate::{Pczt, common::AnchorRequirement, orchard::ParseError};
 
 impl super::Updater {
     /// Updates the Orchard bundle with information in the given closure.
@@ -16,22 +16,27 @@ impl super::Updater {
             ironwood,
             issue,
         } = self.pczt;
+        let anchor_requirement = AnchorRequirement::for_pre_authorization(global.tx_version);
 
-        let mut bundle = orchard
+        let mut parsed = orchard
             .into_parsed_with_version(
                 crate::orchard::orchard_bundle_version(&global)
                     .ok_or(OrchardError::UnsupportedConsensusBranchId)?,
+                anchor_requirement,
             )
             .map_err(OrchardError::Parser)?;
 
-        bundle.update_with(f).map_err(OrchardError::Updater)?;
+        parsed
+            .bundle
+            .update_with(f)
+            .map_err(OrchardError::Updater)?;
 
         Ok(Self {
             pczt: Pczt {
                 global,
                 transparent,
                 sapling,
-                orchard: crate::orchard::Bundle::serialize_from(bundle),
+                orchard: parsed.reserialize(),
                 ironwood,
                 issue,
             },
@@ -52,22 +57,27 @@ impl super::Updater {
             ironwood,
             issue,
         } = self.pczt;
+        let anchor_requirement = AnchorRequirement::for_pre_authorization(global.tx_version);
 
-        let mut bundle = orchard
+        let mut parsed = orchard
             .into_parsed_with_version_zsa(
                 crate::orchard::orchard_bundle_version(&global)
                     .ok_or(OrchardError::UnsupportedConsensusBranchId)?,
+                anchor_requirement,
             )
             .map_err(OrchardError::Parser)?;
 
-        bundle.update_with(f).map_err(OrchardError::Updater)?;
+        parsed
+            .bundle
+            .update_with(f)
+            .map_err(OrchardError::Updater)?;
 
         Ok(Self {
             pczt: Pczt {
                 global,
                 transparent,
                 sapling,
-                orchard: crate::orchard::Bundle::serialize_from(bundle),
+                orchard: parsed.reserialize(),
                 ironwood,
                 issue,
             },
@@ -87,12 +97,16 @@ impl super::Updater {
             ironwood,
             issue,
         } = self.pczt;
+        let anchor_requirement = AnchorRequirement::for_pre_authorization(global.tx_version);
 
-        let mut bundle = ironwood
-            .into_ironwood_parsed()
+        let mut parsed = ironwood
+            .into_ironwood_parsed(anchor_requirement)
             .map_err(OrchardError::Parser)?;
 
-        bundle.update_with(f).map_err(OrchardError::Updater)?;
+        parsed
+            .bundle
+            .update_with(f)
+            .map_err(OrchardError::Updater)?;
 
         Ok(Self {
             pczt: Pczt {
@@ -100,7 +114,7 @@ impl super::Updater {
                 transparent,
                 sapling,
                 orchard,
-                ironwood: crate::orchard::Bundle::serialize_from(bundle),
+                ironwood: parsed.reserialize(),
                 issue,
             },
         })

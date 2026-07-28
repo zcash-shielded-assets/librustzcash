@@ -200,12 +200,15 @@ pub(crate) fn hash_sapling_outputs<A>(shielded_outputs: &[OutputDescription<A>])
         for s_out in shielded_outputs {
             ch.write_all(s_out.cmu().to_bytes().as_ref()).unwrap();
             ch.write_all(s_out.ephemeral_key().as_ref()).unwrap();
-            ch.write_all(&s_out.enc_ciphertext().as_ref()[..52]).unwrap();
+            ch.write_all(&s_out.enc_ciphertext().as_ref()[..52])
+                .unwrap();
 
-            mh.write_all(&s_out.enc_ciphertext().as_ref()[52..564]).unwrap();
+            mh.write_all(&s_out.enc_ciphertext().as_ref()[52..564])
+                .unwrap();
 
             nh.write_all(&s_out.cv().to_bytes()).unwrap();
-            nh.write_all(&s_out.enc_ciphertext().as_ref()[564..]).unwrap();
+            nh.write_all(&s_out.enc_ciphertext().as_ref()[564..])
+                .unwrap();
             nh.write_all(&s_out.out_ciphertext()[..]).unwrap();
         }
 
@@ -240,7 +243,8 @@ fn hash_header_txid_data(
     let mut h = hasher(ZCASH_HEADERS_HASH_PERSONALIZATION);
 
     h.write_u32_le(version.header()).unwrap();
-    h.write_u32_le(version.version_group_id(consensus_branch_id)).unwrap();
+    h.write_u32_le(version.version_group_id(consensus_branch_id))
+        .unwrap();
     h.write_u32_le(consensus_branch_id.into()).unwrap();
     h.write_u32_le(lock_time).unwrap();
     h.write_u32_le(expiry_height.into()).unwrap();
@@ -536,9 +540,7 @@ pub(crate) fn to_hash_zsa(
     .unwrap();
     h.write_all(
         issue_digest
-            .unwrap_or_else(|| {
-                hasher(ZCASH_ORCHARD_ZSA_ISSUE_PERSONALIZATION).finalize()
-            })
+            .unwrap_or_else(|| hasher(ZCASH_ORCHARD_ZSA_ISSUE_PERSONALIZATION).finalize())
             .as_bytes(),
     )
     .unwrap();
@@ -692,13 +694,15 @@ impl TransactionDigest<Authorized> for BlockTxCommitmentDigester {
             },
             |b| match b {
                 super::OrchardBundle::OrchardVanilla(bundle) => {
-                    bundle.authorizing_commitment(tx_version)
+                    bundle
+                        .authorizing_commitment(tx_version)
                         .expect("Orchard bundle flags must be representable in their tx format")
                         .0
                 }
                 #[cfg(feature = "zsa")]
                 super::OrchardBundle::OrchardZSA(bundle) => {
-                    bundle.authorizing_commitment(tx_version)
+                    bundle
+                        .authorizing_commitment(tx_version)
                         .expect("ZSA orchard bundle flags must be representable in their tx format")
                         .0
                 }

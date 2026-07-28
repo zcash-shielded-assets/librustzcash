@@ -11,13 +11,13 @@ use alloc::vec::Vec;
 use rand_core::RngCore;
 
 use orchard::{
+    Address,
     issuance::{
         IssueAuth, IssueBundle,
         auth::{IssueAuthKey, ZSASchnorr},
     },
     note::{ExtractedNoteCommitment, Nullifier},
     value::NoteValue,
-    Address,
 };
 
 use crate::Pczt;
@@ -77,8 +77,7 @@ impl Issuer {
         }
 
         // Build the ZsaBuilder from intents.
-        let mut zsa =
-            zcash_primitives::transaction::zsa_builder::ZsaBuilder::new(isk.clone());
+        let mut zsa = zcash_primitives::transaction::zsa_builder::ZsaBuilder::new(isk.clone());
 
         for intent in &intents {
             let recipient = Address::from_raw_address_bytes(&intent.recipient)
@@ -116,14 +115,9 @@ impl Issuer {
     ///
     /// `sighash` is the shielded sighash computed from the transaction data.
     #[cfg(feature = "zcp-builder")]
-    pub fn sign(
-        self,
-        isk: &IssueAuthKey<ZSASchnorr>,
-        sighash: [u8; 32],
-    ) -> Result<Pczt, Error> {
+    pub fn sign(self, isk: &IssueAuthKey<ZSASchnorr>, sighash: [u8; 32]) -> Result<Pczt, Error> {
         // Reconstruct AwaitingSighash bundle from wire format
-        let bundle = deserialize_bundle(&self.pczt.issue)
-            .ok_or(Error::InvalidIssueData)?;
+        let bundle = deserialize_bundle(&self.pczt.issue).ok_or(Error::InvalidIssueData)?;
 
         let signed = bundle
             .prepare(sighash)
@@ -185,7 +179,9 @@ fn serialize_bundle<T: IssueAuth>(bundle: &IssueBundle<T>) -> crate::issue::Bund
 
 /// Serializes a signed [`IssueBundle`] into the PCZT issue wire format,
 /// including the issuance authorization signature.
-fn serialize_signed_bundle(bundle: &IssueBundle<orchard::issuance::Signed>) -> crate::issue::Bundle {
+fn serialize_signed_bundle(
+    bundle: &IssueBundle<orchard::issuance::Signed>,
+) -> crate::issue::Bundle {
     let sig_bytes = bundle.authorization().signature().sig().encode();
     serialize_bundle_inner(bundle, &sig_bytes)
 }
@@ -222,17 +218,23 @@ fn serialize_bundle_inner<T: IssueAuth>(
             }
         })
         .collect();
-    crate::issue::Bundle { ik, actions, ..Default::default() }
+    crate::issue::Bundle {
+        ik,
+        actions,
+        ..Default::default()
+    }
 }
 
 /// Deserializes the PCZT issue wire format back into an `IssueBundle<AwaitingSighash>`.
-fn deserialize_bundle(wire: &crate::issue::Bundle) -> Option<IssueBundle<orchard::issuance::AwaitingSighash>> {
-    use orchard::{
-        issuance::{IssueAction, IssueBundle, IssuanceFlags},
-        note::{AssetBase, RandomSeed, Rho},
-        Address, Note,
-    };
+fn deserialize_bundle(
+    wire: &crate::issue::Bundle,
+) -> Option<IssueBundle<orchard::issuance::AwaitingSighash>> {
     use nonempty::NonEmpty;
+    use orchard::{
+        Address, Note,
+        issuance::{IssuanceFlags, IssueAction, IssueBundle},
+        note::{AssetBase, RandomSeed, Rho},
+    };
 
     if wire.actions.is_empty() {
         return None;
@@ -252,16 +254,32 @@ fn deserialize_bundle(wire: &crate::issue::Bundle) -> Option<IssueBundle<orchard
                     let asset = AssetBase::from_bytes(&n.asset).into_option()?;
                     let rho = Rho::from_bytes(&n.rho).into_option()?;
                     let rseed = RandomSeed::from_bytes(n.rseed, &rho).into_option()?;
-                    Note::from_parts(recipient, orchard::value::NoteValue::from_raw(n.value), asset, rho, rseed, orchard::NoteVersion::V3ZSA).into_option()
+                    Note::from_parts(
+                        recipient,
+                        orchard::value::NoteValue::from_raw(n.value),
+                        asset,
+                        rho,
+                        rseed,
+                        orchard::NoteVersion::V3ZSA,
+                    )
+                    .into_option()
                 })
                 .collect::<Option<Vec<_>>>()?;
             let flags = IssuanceFlags::from_byte(a.flags)?;
-            Some(IssueAction::from_parts(a.asset_desc_hash, notes, flags.finalize()))
+            Some(IssueAction::from_parts(
+                a.asset_desc_hash,
+                notes,
+                flags.finalize(),
+            ))
         })
         .collect::<Option<Vec<_>>>()?;
 
     let actions = NonEmpty::from_vec(actions)?;
-    Some(IssueBundle::from_parts(ik, actions, orchard::issuance::AwaitingSighash))
+    Some(IssueBundle::from_parts(
+        ik,
+        actions,
+        orchard::issuance::AwaitingSighash,
+    ))
 }
 
 /// Errors that can occur during issuance.
@@ -294,7 +312,9 @@ impl core::fmt::Display for Error {
             Error::InvalidIssueData => write!(f, "pczt.issue contains invalid data"),
             Error::IssuanceSign(e) => write!(f, "Issuance signing error: {e}"),
             Error::NoIssuanceIntents => write!(f, "no issuance intents to build from"),
-            Error::AlreadyBuilt => write!(f, "cannot build from intents when actions already exist"),
+            Error::AlreadyBuilt => {
+                write!(f, "cannot build from intents when actions already exist")
+            }
             Error::InvalidRecipient => write!(f, "invalid recipient address in issuance intent"),
             Error::IssuanceBuild => write!(f, "failed to build issuance bundle from intents"),
         }

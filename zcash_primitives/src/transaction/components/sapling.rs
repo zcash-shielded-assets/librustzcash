@@ -2,6 +2,7 @@ use alloc::vec::Vec;
 use corez::io::{self, Read, Write};
 use ff::PrimeField;
 
+use crate::encoding::{ReadBytesExt, WriteBytesExt};
 use ::sapling::{
     Nullifier,
     bundle::{
@@ -13,7 +14,6 @@ use ::sapling::{
     value::ValueCommitment,
 };
 use redjubjub::SpendAuth;
-use crate::encoding::{ReadBytesExt, WriteBytesExt};
 use zcash_encoding::{Array, CompactSize, Vector};
 use zcash_note_encryption::{ENC_CIPHERTEXT_SIZE, EphemeralKeyBytes, OUT_CIPHERTEXT_SIZE};
 use zcash_protocol::{
@@ -169,7 +169,10 @@ fn read_versioned_signature<R: Read, T: redjubjub::SigType>(
 ) -> io::Result<redjubjub::Signature<T>> {
     let sighash_info_bytes = Vector::read(&mut reader, |r| r.read_u8())?;
     if sighash_info_bytes != SAPLING_SIGHASH_INFO_V0 {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "invalid sighash V0"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "invalid sighash V0",
+        ));
     }
     let mut signature_bytes = [0u8; 64];
     reader.read_exact(&mut signature_bytes)?;
@@ -553,7 +556,9 @@ pub(crate) fn read_v6_bundle<R: Read>(
     let v_output_proofs = Array::read(&mut reader, n_outputs, |r| read_zkproof(r))?;
 
     let binding_sig = if n_spends > 0 || n_outputs > 0 {
-        Some(read_versioned_signature::<_, redjubjub::Binding>(&mut reader)?)
+        Some(read_versioned_signature::<_, redjubjub::Binding>(
+            &mut reader,
+        )?)
     } else {
         None
     };

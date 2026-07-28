@@ -52,10 +52,7 @@ use zcash_protocol::constants::{
 #[cfg(feature = "zsa")]
 pub(crate) use orchard::issuance::IssueBundle;
 #[cfg(feature = "zsa")]
-use {
-    crate::transaction::components::issuance,
-    orchard::zsa::OrchardZSADomain,
-};
+use {crate::transaction::components::issuance, orchard::zsa::OrchardZSADomain};
 
 pub use zcash_protocol::TxId;
 
@@ -115,9 +112,7 @@ impl<A: orchard::bundle::Authorization> OrchardBundle<A> {
     /// ZSA variant (callers that need ZSA should use `try_map_bundles_zsa`).
     pub fn try_map_vanilla<B: orchard::bundle::Authorization, E>(
         self,
-        f: impl FnOnce(
-            orchard::Bundle<A, ZatBalance>,
-        ) -> Result<orchard::Bundle<B, ZatBalance>, E>,
+        f: impl FnOnce(orchard::Bundle<A, ZatBalance>) -> Result<orchard::Bundle<B, ZatBalance>, E>,
     ) -> Result<OrchardBundle<B>, E> {
         match self {
             Self::OrchardVanilla(b) => f(b).map(OrchardBundle::OrchardVanilla),
@@ -148,7 +143,7 @@ impl<A: orchard::bundle::Authorization> OrchardBundle<A> {
                 OrchardBundle::OrchardZSA(b.map_authorization(context, spend_auth, step))
             }
         }
-}
+    }
 }
 
 #[cfg(feature = "zsa")]
@@ -194,8 +189,9 @@ impl TxVersion {
                 (V3_TX_VERSION, V3_VERSION_GROUP_ID) => Ok(TxVersion::V3),
                 (V4_TX_VERSION, V4_VERSION_GROUP_ID) => Ok(TxVersion::V4),
                 (V5_TX_VERSION, V5_VERSION_GROUP_ID) => Ok(TxVersion::V5),
-                (V6_TX_VERSION, V6_VERSION_GROUP_ID)
-                | (V6_TX_VERSION, ZSA_V6_VERSION_GROUP_ID) => Ok(TxVersion::V6),
+                (V6_TX_VERSION, V6_VERSION_GROUP_ID) | (V6_TX_VERSION, ZSA_V6_VERSION_GROUP_ID) => {
+                    Ok(TxVersion::V6)
+                }
                 _ => Err(io::Error::new(
                     io::ErrorKind::InvalidData,
                     "Unknown transaction format",
@@ -340,7 +336,7 @@ impl TxVersion {
                 Sprout | Overwinter | Sapling | Blossom | Heartwood | Canopy | Nu5 | Nu6
                 | Nu6_1 | Nu6_2 => false,
                 Nu6_3 => true, // Ironwood / NU6.3
-                Nu7 => true, // ZIP 230 or ZIP 248, whichever is chosen for activation
+                Nu7 => true,   // ZIP 230 or ZIP 248, whichever is chosen for activation
             },
         }
     }
@@ -758,8 +754,9 @@ impl<A: Authorization> TransactionData<A> {
             sprout_bundle: self.sprout_bundle,
             sapling_bundle: f_sapling(self.sapling_bundle),
             orchard_bundle: self.orchard_bundle.and_then(|b| match b {
-                OrchardBundle::OrchardVanilla(bundle) => f_orchard(Some(bundle))
-                    .map(OrchardBundle::OrchardVanilla),
+                OrchardBundle::OrchardVanilla(bundle) => {
+                    f_orchard(Some(bundle)).map(OrchardBundle::OrchardVanilla)
+                }
                 #[cfg(feature = "zsa")]
                 OrchardBundle::OrchardZSA(_) => None,
             }),
@@ -841,10 +838,7 @@ impl<A: Authorization> TransactionData<A> {
             -> Result<Option<sapling::Bundle<B::SaplingAuth, ZatBalance>>, E>,
         mut f_orchard: impl FnMut(
             Option<OrchardBundle<A::OrchardAuth>>,
-        ) -> Result<
-            Option<OrchardBundle<B::OrchardAuth>>,
-            E,
-        >,
+        ) -> Result<Option<OrchardBundle<B::OrchardAuth>>, E>,
         f_issue: impl FnOnce(
             Option<IssueBundle<A::IssueAuth>>,
         ) -> Result<Option<IssueBundle<B::IssueAuth>>, E>,
@@ -870,8 +864,7 @@ impl<A: Authorization> TransactionData<A> {
         f_transparent: impl transparent::MapAuth<A::TransparentAuth, B::TransparentAuth>,
         mut f_sapling: impl sapling_serialization::MapAuth<A::SaplingAuth, B::SaplingAuth>,
         mut f_orchard: impl orchard_serialization::MapAuth<A::OrchardAuth, B::OrchardAuth>,
-        #[cfg(feature = "zsa")]
-        f_issue: impl issuance::MapIssueAuth<A::IssueAuth, B::IssueAuth>,
+        #[cfg(feature = "zsa")] f_issue: impl issuance::MapIssueAuth<A::IssueAuth, B::IssueAuth>,
     ) -> TransactionData<B> {
         TransactionData {
             version: self.version,
@@ -908,9 +901,9 @@ impl<A: Authorization> TransactionData<A> {
                 )
             }),
             #[cfg(feature = "zsa")]
-            issue_bundle: self.issue_bundle.map(|b| {
-                b.map_authorization(|a| f_issue.map_issue_authorization(a))
-            }),
+            issue_bundle: self
+                .issue_bundle
+                .map(|b| b.map_authorization(|a| f_issue.map_issue_authorization(a))),
         }
     }
 }
@@ -966,7 +959,11 @@ impl Transaction {
             &data.digest(TxIdDigester),
         );
 
-        Transaction { txid, data, zsa_action_enc_ciphertexts: alloc::vec::Vec::new() }
+        Transaction {
+            txid,
+            data,
+            zsa_action_enc_ciphertexts: alloc::vec::Vec::new(),
+        }
     }
 
     fn from_data_v6(data: TransactionData<Authorized>) -> Self {
@@ -976,7 +973,11 @@ impl Transaction {
             &data.digest(TxIdDigester),
         );
 
-        Transaction { txid, data, zsa_action_enc_ciphertexts: alloc::vec::Vec::new() }
+        Transaction {
+            txid,
+            data,
+            zsa_action_enc_ciphertexts: alloc::vec::Vec::new(),
+        }
     }
 
     pub fn into_data(self) -> TransactionData<Authorized> {
@@ -1090,8 +1091,8 @@ impl Transaction {
                 }),
                 orchard_bundle: None,
                 ironwood_bundle: None,
-            #[cfg(feature = "zsa")]
-            issue_bundle: None,
+                #[cfg(feature = "zsa")]
+                issue_bundle: None,
             },
         })
     }
@@ -1347,10 +1348,10 @@ impl Transaction {
             }
         }
 
-        if self.version.has_sapling() {
-            if let Some(bundle) = self.sapling_bundle.as_ref() {
-                writer.write_all(&<[u8; 64]>::from(bundle.authorization().binding_sig))?;
-            }
+        if self.version.has_sapling()
+            && let Some(bundle) = self.sapling_bundle.as_ref()
+        {
+            writer.write_all(&<[u8; 64]>::from(bundle.authorization().binding_sig))?;
         }
 
         Ok(())
@@ -1557,10 +1558,7 @@ pub trait TransactionDigest<A: Authorization> {
     /// when no issue bundle is present. When the `zsa` feature is not enabled,
     /// this method is not available and the issue digest defaults to `()`.
     #[cfg(feature = "zsa")]
-    fn digest_issue(
-        &self,
-        issue_bundle: Option<&IssueBundle<A::IssueAuth>>,
-    ) -> Self::IssueDigest;
+    fn digest_issue(&self, issue_bundle: Option<&IssueBundle<A::IssueAuth>>) -> Self::IssueDigest;
 
     fn combine(
         &self,

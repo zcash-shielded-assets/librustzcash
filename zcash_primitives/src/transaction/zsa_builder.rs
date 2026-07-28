@@ -6,8 +6,7 @@
 //! providing a wallet-facing API for asset issuance, multi-asset minting, and finalization.
 
 use orchard::{
-    Address,
-    issuance,
+    Address, issuance,
     issuance::auth::{IssueAuthKey, IssueValidatingKey, ZSASchnorr},
     issuance::{AwaitingNullifier, AwaitingSighash, IssueBundle, IssueInfo},
     note::{AssetBase, Nullifier},
@@ -41,10 +40,7 @@ impl ZsaBuilder {
     /// The bundle is not initialized until the first call to
     /// [`add_issue_output`](Self::add_issue_output).
     pub fn new(ik: IssueAuthKey<ZSASchnorr>) -> Self {
-        ZsaBuilder {
-            ik,
-            bundle: None,
-        }
+        ZsaBuilder { ik, bundle: None }
     }
 
     /// Adds an issuance output for the given asset.

@@ -14,7 +14,13 @@ use zcash_protocol::{
 };
 
 use crate::{
-    data_api::{AccountMeta, InputSource, NoteFilter, wallet::TargetHeight},
+    data_api::{
+        AccountMeta, InputSource, NoteFilter,
+        wallet::{
+            TargetHeight,
+            input_selection::{LockFilter, LockedInputPolicy},
+        },
+    },
     fees::StandardFeeRule,
 };
 
@@ -25,6 +31,8 @@ use super::{
     sapling as sapling_fees,
 };
 
+#[cfg(feature = "transparent-inputs")]
+use super::TransparentChangePolicy;
 #[cfg(feature = "orchard")]
 use super::orchard as orchard_fees;
 
@@ -67,6 +75,10 @@ pub struct SingleOutputChangeStrategy<R, I> {
     change_memo: Option<MemoBytes>,
     fallback_change_pool: ShieldedPool,
     dust_output_policy: DustOutputPolicy,
+    #[cfg(feature = "orchard")]
+    unpadded_orchard_pool_bundles: bool,
+    #[cfg(feature = "transparent-inputs")]
+    transparent_change_policy: TransparentChangePolicy,
     meta_source: PhantomData<I>,
 }
 
@@ -87,8 +99,42 @@ impl<R, I> SingleOutputChangeStrategy<R, I> {
             change_memo,
             fallback_change_pool,
             dust_output_policy,
+            #[cfg(feature = "orchard")]
+            unpadded_orchard_pool_bundles: false,
+            #[cfg(feature = "transparent-inputs")]
+            transparent_change_policy: TransparentChangePolicy::ShieldChange,
             meta_source: PhantomData,
         }
+    }
+
+    /// Requests unpadded Orchard-pool (Orchard and Ironwood) bundles: fee and
+    /// change calculation will count exactly the requested actions instead of
+    /// padding each bundle to the 2-action minimum.
+    ///
+    /// The transaction executing the proposal must be built with the matching
+    /// bundle type ([`BundleType::UNPADDED`](orchard::builder::BundleType)),
+    /// or the builder's balance check will fail. Intended for transactions whose
+    /// shape is already public (e.g. pool migrations); see the orchard
+    /// `pad_to_minimum` documentation for the privacy trade-off.
+    #[cfg(feature = "orchard")]
+    pub fn with_unpadded_orchard_pool_bundles(mut self) -> Self {
+        self.unpadded_orchard_pool_bundles = true;
+        self
+    }
+
+    /// Sets the [`TransparentChangePolicy`] to be used by this change strategy, determining
+    /// whether change may be returned to the transparent pool when the flows of the transaction
+    /// under construction are fully transparent.
+    ///
+    /// The default is [`TransparentChangePolicy::ShieldChange`]. This policy has no effect on
+    /// transactions that involve any shielded flows.
+    #[cfg(feature = "transparent-inputs")]
+    pub fn with_transparent_change_policy(
+        mut self,
+        transparent_change_policy: TransparentChangePolicy,
+    ) -> Self {
+        self.transparent_change_policy = transparent_change_policy;
+        self
     }
 }
 
@@ -126,7 +172,6 @@ where
         sapling: &impl sapling_fees::BundleView<NoteRefT>,
         #[cfg(feature = "orchard")] orchard: &impl orchard_fees::BundleView<NoteRefT>,
         #[cfg(feature = "orchard")] ironwood: &impl orchard_fees::BundleView<NoteRefT>,
-        #[cfg(feature = "orchard")] orchard_change_to_ironwood: bool,
         ephemeral_balance: Option<EphemeralBalance>,
         _wallet_meta: &Self::AccountMetaT,
     ) -> Result<TransactionBalance, ChangeError<Self::Error, NoteRefT>> {
@@ -138,9 +183,18 @@ where
             self.fee_rule.marginal_fee(),
             &split_policy,
             self.fallback_change_pool,
+            #[cfg(feature = "transparent-inputs")]
+            self.transparent_change_policy,
             self.fee_rule.marginal_fee(),
             self.fee_rule.grace_actions(),
         );
+
+        #[cfg(feature = "orchard")]
+        let orchard_pool_bundle_type = if self.unpadded_orchard_pool_bundles {
+            ::orchard::builder::BundleType::UNPADDED
+        } else {
+            ::orchard::builder::BundleType::DEFAULT
+        };
 
         single_pool_output_balance(
             cfg,
@@ -154,7 +208,7 @@ where
             #[cfg(feature = "orchard")]
             ironwood,
             #[cfg(feature = "orchard")]
-            orchard_change_to_ironwood,
+            orchard_pool_bundle_type,
             self.change_memo.as_ref(),
             ephemeral_balance,
         )
@@ -169,6 +223,10 @@ pub struct MultiOutputChangeStrategy<R, I> {
     fallback_change_pool: ShieldedPool,
     dust_output_policy: DustOutputPolicy,
     split_policy: SplitPolicy,
+    #[cfg(feature = "orchard")]
+    unpadded_orchard_pool_bundles: bool,
+    #[cfg(feature = "transparent-inputs")]
+    transparent_change_policy: TransparentChangePolicy,
     meta_source: PhantomData<I>,
 }
 
@@ -197,8 +255,44 @@ impl<R, I> MultiOutputChangeStrategy<R, I> {
             fallback_change_pool,
             dust_output_policy,
             split_policy,
+            #[cfg(feature = "orchard")]
+            unpadded_orchard_pool_bundles: false,
+            #[cfg(feature = "transparent-inputs")]
+            transparent_change_policy: TransparentChangePolicy::ShieldChange,
             meta_source: PhantomData,
         }
+    }
+
+    /// Requests unpadded Orchard-pool (Orchard and Ironwood) bundles: fee and
+    /// change calculation will count exactly the requested actions instead of
+    /// padding each bundle to the 2-action minimum.
+    ///
+    /// The transaction executing the proposal must be built with the matching
+    /// bundle type ([`BundleType::UNPADDED`](orchard::builder::BundleType)),
+    /// or the builder's balance check will fail. Intended for transactions whose
+    /// shape is already public (e.g. pool migrations); see the orchard
+    /// `pad_to_minimum` documentation for the privacy trade-off.
+    #[cfg(feature = "orchard")]
+    pub fn with_unpadded_orchard_pool_bundles(mut self) -> Self {
+        self.unpadded_orchard_pool_bundles = true;
+        self
+    }
+
+    /// Sets the [`TransparentChangePolicy`] to be used by this change strategy, determining
+    /// whether change may be returned to the transparent pool when the flows of the transaction
+    /// under construction are fully transparent.
+    ///
+    /// The default is [`TransparentChangePolicy::ShieldChange`]. This policy has no effect on
+    /// transactions that involve any shielded flows. When transparent change is produced, it is
+    /// always emitted as a single output; the [`SplitPolicy`] configured for this strategy applies
+    /// only to shielded change.
+    #[cfg(feature = "transparent-inputs")]
+    pub fn with_transparent_change_policy(
+        mut self,
+        transparent_change_policy: TransparentChangePolicy,
+    ) -> Self {
+        self.transparent_change_policy = transparent_change_policy;
+        self
     }
 }
 
@@ -230,7 +324,16 @@ where
                 .unwrap_or(SplitPolicy::MIN_NOTE_VALUE),
         );
 
-        meta_source.get_account_metadata(account, &note_selector, target_height, exclude)
+        // Account metadata feeds change-splitting decisions, which reason about the
+        // notes that selection can actually draw on; locked notes are excluded from
+        // selection, so they are excluded here as well.
+        meta_source.get_account_metadata(
+            account,
+            &note_selector,
+            target_height,
+            exclude,
+            LockFilter::Policy(&LockedInputPolicy::Exclude),
+        )
     }
 
     fn compute_balance<P: consensus::Parameters, NoteRefT: Clone>(
@@ -242,7 +345,6 @@ where
         sapling: &impl sapling_fees::BundleView<NoteRefT>,
         #[cfg(feature = "orchard")] orchard: &impl orchard_fees::BundleView<NoteRefT>,
         #[cfg(feature = "orchard")] ironwood: &impl orchard_fees::BundleView<NoteRefT>,
-        #[cfg(feature = "orchard")] orchard_change_to_ironwood: bool,
         ephemeral_balance: Option<EphemeralBalance>,
         wallet_meta: &Self::AccountMetaT,
     ) -> Result<TransactionBalance, ChangeError<Self::Error, NoteRefT>> {
@@ -253,9 +355,18 @@ where
             self.fee_rule.marginal_fee(),
             &self.split_policy,
             self.fallback_change_pool,
+            #[cfg(feature = "transparent-inputs")]
+            self.transparent_change_policy,
             self.fee_rule.marginal_fee(),
             self.fee_rule.grace_actions(),
         );
+
+        #[cfg(feature = "orchard")]
+        let orchard_pool_bundle_type = if self.unpadded_orchard_pool_bundles {
+            ::orchard::builder::BundleType::UNPADDED
+        } else {
+            ::orchard::builder::BundleType::DEFAULT
+        };
 
         single_pool_output_balance(
             cfg,
@@ -269,7 +380,7 @@ where
             #[cfg(feature = "orchard")]
             ironwood,
             #[cfg(feature = "orchard")]
-            orchard_change_to_ironwood,
+            orchard_pool_bundle_type,
             self.change_memo.as_ref(),
             ephemeral_balance,
         )
@@ -306,6 +417,9 @@ mod tests {
         crate::fees::orchard as orchard_fees,
     };
 
+    #[cfg(all(feature = "orchard", feature = "transparent-inputs"))]
+    use crate::data_api::wallet::TargetHeight;
+
     #[test]
     fn change_without_dust() {
         let change_strategy = SingleOutputChangeStrategy::<_, MockWalletDb>::new(
@@ -336,8 +450,6 @@ mod tests {
             &orchard_fees::EmptyBundleView,
             #[cfg(feature = "orchard")]
             &orchard_fees::EmptyBundleView,
-            #[cfg(feature = "orchard")]
-            false,
             None,
             &(),
         );
@@ -386,10 +498,8 @@ mod tests {
                     &orchard_fees::EmptyBundleView,
                     #[cfg(feature = "orchard")]
                     &orchard_fees::EmptyBundleView,
-                    #[cfg(feature = "orchard")]
-                    false,
                     None,
-                    &AccountMeta::new(Some(PoolMeta::new(existing_notes, total)), None),
+                    &AccountMeta::new(Some(PoolMeta::new(existing_notes, total)), None, None),
                 )
             };
 
@@ -441,12 +551,11 @@ mod tests {
                 &orchard_fees::EmptyBundleView,
                 #[cfg(feature = "orchard")]
                 &orchard_fees::EmptyBundleView,
-                #[cfg(feature = "orchard")]
-                false,
                 None,
                 &AccountMeta::new(
                     Some(PoolMeta::new(0, Zatoshis::ZERO)),
                     Some(PoolMeta::new(0, Zatoshis::ZERO)),
+                    None,
                 ),
             );
 
@@ -486,13 +595,12 @@ mod tests {
                 &orchard_fees::EmptyBundleView,
                 #[cfg(feature = "orchard")]
                 &orchard_fees::EmptyBundleView,
-                #[cfg(feature = "orchard")]
-                false,
                 None,
                 // after excluding the inputs we're spending, we have no notes in the wallet
                 &AccountMeta::new(
                     Some(PoolMeta::new(0, Zatoshis::ZERO)),
                     Some(PoolMeta::new(0, Zatoshis::ZERO)),
+                    None,
                 ),
             );
 
@@ -526,13 +634,12 @@ mod tests {
                 &orchard_fees::EmptyBundleView,
                 #[cfg(feature = "orchard")]
                 &orchard_fees::EmptyBundleView,
-                #[cfg(feature = "orchard")]
-                false,
                 None,
                 // after excluding the inputs we're spending, we have no notes in the wallet
                 &AccountMeta::new(
                     Some(PoolMeta::new(0, Zatoshis::ZERO)),
                     Some(PoolMeta::new(0, Zatoshis::ZERO)),
+                    None,
                 ),
             );
 
@@ -574,13 +681,12 @@ mod tests {
                 &orchard_fees::EmptyBundleView,
                 #[cfg(feature = "orchard")]
                 &orchard_fees::EmptyBundleView,
-                #[cfg(feature = "orchard")]
-                false,
                 None,
                 // after excluding the inputs we're spending, we have no notes in the wallet
                 &AccountMeta::new(
                     Some(PoolMeta::new(0, Zatoshis::ZERO)),
                     Some(PoolMeta::new(0, Zatoshis::ZERO)),
+                    None,
                 ),
             );
 
@@ -626,7 +732,6 @@ mod tests {
                 &[OrchardPayment::new(Zatoshis::const_from_u64(30000))][..],
             ),
             &orchard_fees::EmptyBundleView,
-            false,
             None,
             &(),
         );
@@ -673,7 +778,6 @@ mod tests {
                 &[OrchardPayment::new(Zatoshis::const_from_u64(30000))][..],
             ),
             &orchard_fees::EmptyBundleView,
-            false,
             None,
             &(),
         );
@@ -682,6 +786,127 @@ mod tests {
             result,
             Ok(balance) if
                 balance.proposed_change() == [ChangeValue::orchard(Zatoshis::const_from_u64(35000), None)] &&
+                balance.fee_required() == Zatoshis::const_from_u64(15000)
+        );
+    }
+
+    #[test]
+    #[cfg(all(feature = "orchard", feature = "transparent-inputs"))]
+    fn orchard_fallback_change_pool_is_promoted_to_ironwood_after_nu6_3() {
+        use crate::fees::sapling as sapling_fees;
+        use ::transparent::{address::TransparentAddress, bundle::OutPoint};
+
+        // A caller that names Orchard as its fallback change pool.
+        let change_strategy = MultiOutputChangeStrategy::<_, MockWalletDb>::new(
+            Zip317FeeRule::standard(),
+            None,
+            ShieldedPool::Orchard,
+            DustOutputPolicy::default(),
+            SplitPolicy::with_min_output_value(
+                NonZeroUsize::new(2).unwrap(),
+                Zatoshis::const_from_u64(100_0000),
+            ),
+        );
+
+        // A single transparent UTXO, shielded to the change pool. The fallback pool only
+        // decides where change goes for a transaction whose flows are fully transparent: one
+        // with shielded flows infers its change pool from the pool it already uses. So this
+        // is the case in which naming Orchard as the fallback can actually direct change
+        // into the Orchard pool.
+        let transparent_inputs = [TestTransparentInput {
+            outpoint: OutPoint::fake(),
+            coin: TxOut::new(
+                Zatoshis::const_from_u64(63000),
+                TransparentAddress::PublicKeyHash([0u8; 20]).script().into(),
+            ),
+        }];
+        let transparent_outputs = [TxOut::new(
+            Zatoshis::const_from_u64(40000),
+            Script::default(),
+        )];
+
+        // The shielded views are empty: the transaction has no shielded flows, so the change
+        // output the strategy proposes is the only thing that will populate one of them.
+        let sapling_view = sapling_fees::EmptyBundleView;
+        let ironwood_view = (
+            ::orchard::bundle::BundleVersion::ironwood_v3(),
+            &[] as &[Infallible],
+            &[] as &[Infallible],
+        );
+
+        // This transaction is not one half of a ZIP 320 pair, so it has no ephemeral balance.
+        let ephemeral_balance = None;
+
+        // No note counts are known for the account, so the split policy proposes a single
+        // change output: the assertions below are about the pool it lands in, not the split.
+        let wallet_meta = AccountMeta::new(None, None, None);
+
+        // The Orchard bundle version whose action-count policy applies at each height. The
+        // Orchard view is empty in both cases and so contributes no actions, but the version
+        // is what the transaction builder will be configured with.
+        let pre_nu6_3_orchard_view = (
+            ::orchard::bundle::BundleVersion::orchard_v2(),
+            &[] as &[Infallible],
+            &[] as &[Infallible],
+        );
+        let post_nu6_3_orchard_view = (
+            ::orchard::bundle::BundleVersion::orchard_v3(),
+            &[] as &[Infallible],
+            &[] as &[Infallible],
+        );
+
+        let pre_nu6_3_height: TargetHeight = Network::TestNetwork
+            .activation_height(NetworkUpgrade::Nu5)
+            .unwrap()
+            .into();
+        let post_nu6_3_height: TargetHeight = Network::TestNetwork
+            .activation_height(NetworkUpgrade::Nu6_3)
+            .unwrap()
+            .into();
+
+        // Before NU6.3, value may freely enter the Orchard pool, so the fallback is honoured
+        // as given and the change is returned to Orchard.
+        let pre_nu6_3_balance = change_strategy.compute_balance::<_, Infallible>(
+            &Network::TestNetwork,
+            pre_nu6_3_height,
+            &transparent_inputs,
+            &transparent_outputs,
+            &sapling_view,
+            &pre_nu6_3_orchard_view,
+            &ironwood_view,
+            ephemeral_balance,
+            &wallet_meta,
+        );
+
+        assert_matches!(
+            pre_nu6_3_balance,
+            Ok(balance) if
+                balance.proposed_change() == [ChangeValue::orchard(Zatoshis::const_from_u64(8000), None)] &&
+                balance.fee_required() == Zatoshis::const_from_u64(15000)
+        );
+
+        // After NU6.3, the Orchard turnstile forbids value from entering the Orchard pool.
+        // This transaction spends no Orchard notes, so no amount of change may return to
+        // Orchard; the strategy promotes the Orchard fallback to Ironwood rather than
+        // proposing change that consensus would reject. The fee is unchanged: the change
+        // output is charged to the Ironwood bundle instead of the Orchard one, and each pads
+        // to the same two-action floor.
+        let post_nu6_3_balance = change_strategy.compute_balance::<_, Infallible>(
+            &Network::TestNetwork,
+            post_nu6_3_height,
+            &transparent_inputs,
+            &transparent_outputs,
+            &sapling_view,
+            &post_nu6_3_orchard_view,
+            &ironwood_view,
+            ephemeral_balance,
+            &wallet_meta,
+        );
+
+        assert_matches!(
+            post_nu6_3_balance,
+            Ok(balance) if
+                balance.proposed_change() == [ChangeValue::ironwood(Zatoshis::const_from_u64(8000), None)] &&
                 balance.fee_required() == Zatoshis::const_from_u64(15000)
         );
     }
@@ -729,7 +954,6 @@ mod tests {
                 &sapling_view,
                 &orchard_view,
                 &orchard_fees::EmptyBundleView,
-                false,
                 None,
                 &(),
             )
@@ -748,7 +972,6 @@ mod tests {
                     &[] as &[Infallible],
                     &orchard_outputs[..],
                 ),
-                false,
                 None,
                 &(),
             )
@@ -770,22 +993,12 @@ mod tests {
 
     #[test]
     #[cfg(feature = "orchard")]
-    fn orchard_change_routes_to_ironwood_bundle() {
-        // With `orchard_change_to_ironwood` set (the builder routes Orchard-pool
-        // outputs into a separate Ironwood bundle when Ironwood is active), the
-        // Orchard-pool change output must be counted in the Ironwood bundle, not the
-        // Orchard bundle — matching where the builder places it. This exercises the
-        // change-routing path directly: an Orchard payment forces the change to the
-        // Orchard pool, and two Ironwood payments make the Ironwood bundle large
-        // enough that moving the change into it raises its action count, so routing
-        // the change has an observable effect on the fee.
-        let change_strategy = SingleOutputChangeStrategy::<_, MockWalletDb>::new(
-            Zip317FeeRule::standard(),
-            None,
-            ShieldedPool::Orchard,
-            DustOutputPolicy::default(),
-        );
-
+    fn unpadded_orchard_pool_bundles_lower_the_fee() {
+        // `with_unpadded_orchard_pool_bundles` drops the ZIP 317 2-action padding floor
+        // for the Orchard and Ironwood bundles. This reuses the
+        // `ironwood_outputs_are_charged_actions` scenario, where only the single-output
+        // Ironwood bundle is below the floor, so the unpadded strategy charges it 1
+        // action instead of 2 and the fee falls by exactly one 5000-zat action.
         let height = Network::TestNetwork
             .activation_height(NetworkUpgrade::Nu5)
             .unwrap()
@@ -794,11 +1007,7 @@ mod tests {
             note_id: 0,
             value: Zatoshis::const_from_u64(100000),
         }];
-        let orchard_outputs = [OrchardPayment::new(Zatoshis::const_from_u64(10000))];
-        let ironwood_outputs = [
-            OrchardPayment::new(Zatoshis::const_from_u64(10000)),
-            OrchardPayment::new(Zatoshis::const_from_u64(10000)),
-        ];
+        let orchard_outputs = [OrchardPayment::new(Zatoshis::const_from_u64(30000))];
         let sapling_view = (
             sapling::builder::BundleType::DEFAULT,
             &sapling_inputs[..],
@@ -812,35 +1021,60 @@ mod tests {
         let ironwood_view = (
             ::orchard::bundle::BundleVersion::ironwood_v3(),
             &[] as &[Infallible],
-            &ironwood_outputs[..],
+            &orchard_outputs[..],
         );
 
-        let fee_for = |orchard_change_to_ironwood: bool| {
-            change_strategy
-                .compute_balance(
-                    &Network::TestNetwork,
-                    height,
-                    &[] as &[TestTransparentInput],
-                    &[] as &[TxOut],
-                    &sapling_view,
-                    &orchard_view,
-                    &ironwood_view,
-                    orchard_change_to_ironwood,
-                    None,
-                    &(),
-                )
-                .unwrap()
-                .fee_required()
-        };
+        let padded_fee = SingleOutputChangeStrategy::<_, MockWalletDb>::new(
+            Zip317FeeRule::standard(),
+            None,
+            ShieldedPool::Orchard,
+            DustOutputPolicy::default(),
+        )
+        .compute_balance(
+            &Network::TestNetwork,
+            height,
+            &[] as &[TestTransparentInput],
+            &[] as &[TxOut],
+            &sapling_view,
+            &orchard_view,
+            &ironwood_view,
+            None,
+            &(),
+        )
+        .unwrap()
+        .fee_required();
 
-        // Change in Orchard: sapling (2) + orchard (1 payment + 1 change = 2) +
-        // ironwood (2 payments = 2) = 6 actions = 30000. Routing the change into
-        // Ironwood: orchard (1 payment = 2) + ironwood (2 payments + 1 change = 3)
-        // = 7 actions = 35000.
-        let change_in_orchard = fee_for(false);
-        let change_in_ironwood = fee_for(true);
-        assert_eq!(change_in_orchard, Zatoshis::const_from_u64(30000));
-        assert_eq!(change_in_ironwood, Zatoshis::const_from_u64(35000));
+        let unpadded_fee = SingleOutputChangeStrategy::<_, MockWalletDb>::new(
+            Zip317FeeRule::standard(),
+            None,
+            ShieldedPool::Orchard,
+            DustOutputPolicy::default(),
+        )
+        .with_unpadded_orchard_pool_bundles()
+        .compute_balance(
+            &Network::TestNetwork,
+            height,
+            &[] as &[TestTransparentInput],
+            &[] as &[TxOut],
+            &sapling_view,
+            &orchard_view,
+            &ironwood_view,
+            None,
+            &(),
+        )
+        .unwrap()
+        .fee_required();
+
+        // Padded default matches `ironwood_outputs_are_charged_actions`: sapling (2) +
+        // orchard (1 payment + 1 change = 2) + ironwood (1 output, padded to 2) = 6
+        // actions = 30000 zat. Unpadded charges the single-output Ironwood bundle 1
+        // action, so the fee drops by one 5000-zat action to 25000.
+        assert_eq!(padded_fee, Zatoshis::const_from_u64(30000));
+        assert_eq!(unpadded_fee, Zatoshis::const_from_u64(25000));
+        assert_eq!(
+            padded_fee,
+            (unpadded_fee + Zatoshis::const_from_u64(5000)).unwrap()
+        );
     }
 
     #[test]
@@ -888,8 +1122,6 @@ mod tests {
             &orchard_fees::EmptyBundleView,
             #[cfg(feature = "orchard")]
             &orchard_fees::EmptyBundleView,
-            #[cfg(feature = "orchard")]
-            false,
             None,
             &(),
         );
@@ -938,8 +1170,6 @@ mod tests {
             &orchard_fees::EmptyBundleView,
             #[cfg(feature = "orchard")]
             &orchard_fees::EmptyBundleView,
-            #[cfg(feature = "orchard")]
-            false,
             None,
             &(),
         );
@@ -988,8 +1218,6 @@ mod tests {
             &orchard_fees::EmptyBundleView,
             #[cfg(feature = "orchard")]
             &orchard_fees::EmptyBundleView,
-            #[cfg(feature = "orchard")]
-            false,
             None,
             &(),
         );
@@ -1044,8 +1272,6 @@ mod tests {
             &orchard_fees::EmptyBundleView,
             #[cfg(feature = "orchard")]
             &orchard_fees::EmptyBundleView,
-            #[cfg(feature = "orchard")]
-            false,
             None,
             &(),
         );
@@ -1055,6 +1281,367 @@ mod tests {
             Ok(balance) if
                 balance.proposed_change() == [ChangeValue::sapling(Zatoshis::const_from_u64(1000), None)] &&
                 balance.fee_required() == Zatoshis::const_from_u64(15000)
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "transparent-inputs")]
+    fn change_fully_transparent_with_transparent_change() {
+        use crate::fees::{TransparentChangePolicy, sapling as sapling_fees};
+        use ::transparent::{address::TransparentAddress, bundle::OutPoint};
+
+        let change_strategy = SingleOutputChangeStrategy::<_, MockWalletDb>::new(
+            Zip317FeeRule::standard(),
+            None,
+            ShieldedPool::Sapling,
+            DustOutputPolicy::default(),
+        )
+        .with_transparent_change_policy(TransparentChangePolicy::TransparentChangeAllowed);
+
+        // Spend a single transparent UTXO that is sufficient to pay the fee. The change is
+        // returned to the transparent pool: one P2PKH input and two P2PKH outputs (the
+        // payment plus the change output) require `5000 * max(1, 2) = 10000` zats in fees,
+        // rather than the 15000 zats required when the change is shielded.
+        let result = change_strategy.compute_balance::<_, Infallible>(
+            &Network::TestNetwork,
+            Network::TestNetwork
+                .activation_height(NetworkUpgrade::Nu5)
+                .unwrap()
+                .into(),
+            &[TestTransparentInput {
+                outpoint: OutPoint::fake(),
+                coin: TxOut::new(
+                    Zatoshis::const_from_u64(63000),
+                    TransparentAddress::PublicKeyHash([0u8; 20]).script().into(),
+                ),
+            }],
+            &[TxOut::new(
+                Zatoshis::const_from_u64(40000),
+                Script::default(),
+            )],
+            &sapling_fees::EmptyBundleView,
+            #[cfg(feature = "orchard")]
+            &orchard_fees::EmptyBundleView,
+            #[cfg(feature = "orchard")]
+            &orchard_fees::EmptyBundleView,
+            None,
+            &(),
+        );
+
+        assert_matches!(
+            result,
+            Ok(balance) if
+                balance.proposed_change() == [ChangeValue::transparent(Zatoshis::const_from_u64(13000))] &&
+                balance.fee_required() == Zatoshis::const_from_u64(10000)
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "transparent-inputs")]
+    fn change_fully_transparent_exact_match_with_transparent_change() {
+        use crate::fees::{TransparentChangePolicy, sapling as sapling_fees};
+        use ::transparent::{address::TransparentAddress, bundle::OutPoint};
+
+        let change_strategy = SingleOutputChangeStrategy::<_, MockWalletDb>::new(
+            Zip317FeeRule::standard(),
+            None,
+            ShieldedPool::Sapling,
+            DustOutputPolicy::default(),
+        )
+        .with_transparent_change_policy(TransparentChangePolicy::TransparentChangeAllowed);
+
+        // Spend a single transparent UTXO that exactly covers the payment plus the minimum
+        // fee; no change output should be produced.
+        let result = change_strategy.compute_balance::<_, Infallible>(
+            &Network::TestNetwork,
+            Network::TestNetwork
+                .activation_height(NetworkUpgrade::Nu5)
+                .unwrap()
+                .into(),
+            &[TestTransparentInput {
+                outpoint: OutPoint::fake(),
+                coin: TxOut::new(
+                    Zatoshis::const_from_u64(50000),
+                    TransparentAddress::PublicKeyHash([0u8; 20]).script().into(),
+                ),
+            }],
+            &[TxOut::new(
+                Zatoshis::const_from_u64(40000),
+                Script::default(),
+            )],
+            &sapling_fees::EmptyBundleView,
+            #[cfg(feature = "orchard")]
+            &orchard_fees::EmptyBundleView,
+            #[cfg(feature = "orchard")]
+            &orchard_fees::EmptyBundleView,
+            None,
+            &(),
+        );
+
+        assert_matches!(
+            result,
+            Ok(balance) if
+                balance.proposed_change().is_empty() &&
+                balance.fee_required() == Zatoshis::const_from_u64(10000)
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "transparent-inputs")]
+    fn transparent_change_policy_has_no_effect_on_shielded_flows() {
+        use crate::fees::TransparentChangePolicy;
+
+        let change_strategy = SingleOutputChangeStrategy::<_, MockWalletDb>::new(
+            Zip317FeeRule::standard(),
+            None,
+            ShieldedPool::Sapling,
+            DustOutputPolicy::default(),
+        )
+        .with_transparent_change_policy(TransparentChangePolicy::TransparentChangeAllowed);
+
+        // Spend a single Sapling note; because the transaction involves shielded flows, the
+        // change must be shielded even though transparent change is allowed by the policy.
+        let result = change_strategy.compute_balance(
+            &Network::TestNetwork,
+            Network::TestNetwork
+                .activation_height(NetworkUpgrade::Nu5)
+                .unwrap()
+                .into(),
+            &[] as &[TestTransparentInput],
+            &[] as &[TxOut],
+            &(
+                sapling::builder::BundleType::DEFAULT,
+                &[TestSaplingInput {
+                    note_id: 0,
+                    value: Zatoshis::const_from_u64(55000),
+                }][..],
+                &[SaplingPayment::new(Zatoshis::const_from_u64(40000))][..],
+            ),
+            #[cfg(feature = "orchard")]
+            &orchard_fees::EmptyBundleView,
+            #[cfg(feature = "orchard")]
+            &orchard_fees::EmptyBundleView,
+            None,
+            &(),
+        );
+
+        assert_matches!(
+            result,
+            Ok(balance) if
+                balance.proposed_change() == [ChangeValue::sapling(Zatoshis::const_from_u64(5000), None)] &&
+                balance.fee_required() == Zatoshis::const_from_u64(10000)
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "transparent-inputs")]
+    fn transparent_change_is_not_split() {
+        use crate::fees::{TransparentChangePolicy, sapling as sapling_fees};
+        use ::transparent::{address::TransparentAddress, bundle::OutPoint};
+
+        let change_strategy = MultiOutputChangeStrategy::<_, MockWalletDb>::new(
+            Zip317FeeRule::standard(),
+            None,
+            ShieldedPool::Sapling,
+            DustOutputPolicy::default(),
+            SplitPolicy::with_min_output_value(
+                NonZeroUsize::new(5).unwrap(),
+                Zatoshis::const_from_u64(100_0000),
+            ),
+        )
+        .with_transparent_change_policy(TransparentChangePolicy::TransparentChangeAllowed);
+
+        // Spend a single transparent UTXO with change value sufficient to produce five
+        // split outputs under the split policy; because the change is returned to the
+        // transparent pool, it must nevertheless be emitted as a single output.
+        let result = change_strategy.compute_balance::<_, Infallible>(
+            &Network::TestNetwork,
+            Network::TestNetwork
+                .activation_height(NetworkUpgrade::Nu5)
+                .unwrap()
+                .into(),
+            &[TestTransparentInput {
+                outpoint: OutPoint::fake(),
+                coin: TxOut::new(
+                    Zatoshis::const_from_u64(750_0000),
+                    TransparentAddress::PublicKeyHash([0u8; 20]).script().into(),
+                ),
+            }],
+            &[TxOut::new(
+                Zatoshis::const_from_u64(100_0000),
+                Script::default(),
+            )],
+            &sapling_fees::EmptyBundleView,
+            #[cfg(feature = "orchard")]
+            &orchard_fees::EmptyBundleView,
+            #[cfg(feature = "orchard")]
+            &orchard_fees::EmptyBundleView,
+            None,
+            &AccountMeta::new(Some(PoolMeta::new(0, Zatoshis::ZERO)), None, None),
+        );
+
+        assert_matches!(
+            result,
+            Ok(balance) if
+                balance.proposed_change() == [ChangeValue::transparent(Zatoshis::const_from_u64(649_0000))] &&
+                balance.fee_required() == Zatoshis::const_from_u64(10000)
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "transparent-inputs")]
+    fn transparent_change_rejects_dust() {
+        use crate::fees::{TransparentChangePolicy, sapling as sapling_fees};
+        use ::transparent::{address::TransparentAddress, bundle::OutPoint};
+
+        let change_strategy = SingleOutputChangeStrategy::<_, MockWalletDb>::new(
+            Zip317FeeRule::standard(),
+            None,
+            ShieldedPool::Sapling,
+            DustOutputPolicy::default(),
+        )
+        .with_transparent_change_policy(TransparentChangePolicy::TransparentChangeAllowed);
+
+        // Spend a single transparent UTXO that would result in a 100-zat transparent change
+        // output; under the default dust policy this must be rejected. The 55000-zat
+        // requirement reflects the 5000-zat default dust threshold: adding 4900 zats to the
+        // input value would produce change exactly at the threshold.
+        let result = change_strategy.compute_balance::<_, Infallible>(
+            &Network::TestNetwork,
+            Network::TestNetwork
+                .activation_height(NetworkUpgrade::Nu5)
+                .unwrap()
+                .into(),
+            &[TestTransparentInput {
+                outpoint: OutPoint::fake(),
+                coin: TxOut::new(
+                    Zatoshis::const_from_u64(50100),
+                    TransparentAddress::PublicKeyHash([0u8; 20]).script().into(),
+                ),
+            }],
+            &[TxOut::new(
+                Zatoshis::const_from_u64(40000),
+                Script::default(),
+            )],
+            &sapling_fees::EmptyBundleView,
+            #[cfg(feature = "orchard")]
+            &orchard_fees::EmptyBundleView,
+            #[cfg(feature = "orchard")]
+            &orchard_fees::EmptyBundleView,
+            None,
+            &(),
+        );
+
+        assert_matches!(
+            result,
+            Err(ChangeError::InsufficientFunds { available, required })
+                if available == Zatoshis::const_from_u64(50100)
+                   && required == Zatoshis::const_from_u64(55000)
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "transparent-inputs")]
+    fn transparent_change_allows_dust() {
+        use crate::fees::{TransparentChangePolicy, sapling as sapling_fees};
+        use ::transparent::{address::TransparentAddress, bundle::OutPoint};
+
+        let change_strategy = SingleOutputChangeStrategy::<_, MockWalletDb>::new(
+            Zip317FeeRule::standard(),
+            None,
+            ShieldedPool::Sapling,
+            DustOutputPolicy::new(
+                DustAction::AllowDustChange,
+                Some(Zatoshis::const_from_u64(1000)),
+            ),
+        )
+        .with_transparent_change_policy(TransparentChangePolicy::TransparentChangeAllowed);
+
+        // Spend a single transparent UTXO that results in a 100-zat transparent change
+        // output; the `AllowDustChange` policy permits emitting it even though it is below
+        // the 1000-zat dust threshold.
+        let result = change_strategy.compute_balance::<_, Infallible>(
+            &Network::TestNetwork,
+            Network::TestNetwork
+                .activation_height(NetworkUpgrade::Nu5)
+                .unwrap()
+                .into(),
+            &[TestTransparentInput {
+                outpoint: OutPoint::fake(),
+                coin: TxOut::new(
+                    Zatoshis::const_from_u64(50100),
+                    TransparentAddress::PublicKeyHash([0u8; 20]).script().into(),
+                ),
+            }],
+            &[TxOut::new(
+                Zatoshis::const_from_u64(40000),
+                Script::default(),
+            )],
+            &sapling_fees::EmptyBundleView,
+            #[cfg(feature = "orchard")]
+            &orchard_fees::EmptyBundleView,
+            #[cfg(feature = "orchard")]
+            &orchard_fees::EmptyBundleView,
+            None,
+            &(),
+        );
+
+        assert_matches!(
+            result,
+            Ok(balance) if
+                balance.proposed_change() == [ChangeValue::transparent(Zatoshis::const_from_u64(100))] &&
+                balance.fee_required() == Zatoshis::const_from_u64(10000)
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "transparent-inputs")]
+    fn transparent_change_dust_added_to_fee() {
+        use crate::fees::{TransparentChangePolicy, sapling as sapling_fees};
+        use ::transparent::{address::TransparentAddress, bundle::OutPoint};
+
+        let change_strategy = SingleOutputChangeStrategy::<_, MockWalletDb>::new(
+            Zip317FeeRule::standard(),
+            None,
+            ShieldedPool::Sapling,
+            DustOutputPolicy::new(DustAction::AddDustToFee, None),
+        )
+        .with_transparent_change_policy(TransparentChangePolicy::TransparentChangeAllowed);
+
+        // Spend a single transparent UTXO that would result in a 100-zat transparent change
+        // output; under the `AddDustToFee` policy the dust value is instead added to the
+        // fee and no change output is produced.
+        let result = change_strategy.compute_balance::<_, Infallible>(
+            &Network::TestNetwork,
+            Network::TestNetwork
+                .activation_height(NetworkUpgrade::Nu5)
+                .unwrap()
+                .into(),
+            &[TestTransparentInput {
+                outpoint: OutPoint::fake(),
+                coin: TxOut::new(
+                    Zatoshis::const_from_u64(50100),
+                    TransparentAddress::PublicKeyHash([0u8; 20]).script().into(),
+                ),
+            }],
+            &[TxOut::new(
+                Zatoshis::const_from_u64(40000),
+                Script::default(),
+            )],
+            &sapling_fees::EmptyBundleView,
+            #[cfg(feature = "orchard")]
+            &orchard_fees::EmptyBundleView,
+            #[cfg(feature = "orchard")]
+            &orchard_fees::EmptyBundleView,
+            None,
+            &(),
+        );
+
+        assert_matches!(
+            result,
+            Ok(balance) if
+                balance.proposed_change().is_empty() &&
+                balance.fee_required() == Zatoshis::const_from_u64(10100)
         );
     }
 
@@ -1109,8 +1696,6 @@ mod tests {
             &orchard_fees::EmptyBundleView,
             #[cfg(feature = "orchard")]
             &orchard_fees::EmptyBundleView,
-            #[cfg(feature = "orchard")]
-            false,
             None,
             &(),
         );
@@ -1164,8 +1749,6 @@ mod tests {
             &orchard_fees::EmptyBundleView,
             #[cfg(feature = "orchard")]
             &orchard_fees::EmptyBundleView,
-            #[cfg(feature = "orchard")]
-            false,
             None,
             &(),
         );

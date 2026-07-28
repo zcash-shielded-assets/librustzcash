@@ -11,7 +11,7 @@ use rand::RngCore;
 use rand_distr::Distribution;
 use rusqlite::OptionalExtension;
 use rusqlite::types::Value;
-use rusqlite::{Connection, Row, named_params};
+use rusqlite::{Connection, Row, ToSql, named_params};
 use tracing::{debug, warn};
 
 use transparent::{
@@ -22,10 +22,11 @@ use transparent::{
 use zcash_address::unified::{Ivk, Uivk};
 use zcash_client_backend::{
     data_api::{
-        Account, AccountBalance, Balance, OutputStatusFilter, TransactionDataRequest,
-        TransactionStatusFilter, TransparentBalances, TransparentOutputFilter,
-        wallet::{ConfirmationsPolicy, TargetHeight},
+        Account, AccountBalance, Balance, CoinbaseFilter, OutputStatusFilter, TargetValue,
+        TransactionDataRequest, TransactionStatusFilter, TransparentBalances,
+        wallet::{ConfirmationsPolicy, TargetHeight, input_selection::LockFilter},
     },
+    fees::StandardFeeRule,
     wallet::{
         Exposure, GapMetadata, TransparentAddressMetadata, TransparentAddressSource,
         WalletTransparentOutput,
@@ -42,7 +43,11 @@ use zcash_keys::{
 };
 #[cfg(not(feature = "spend-index"))]
 use zcash_primitives::transaction::builder::DEFAULT_TX_EXPIRY_DELTA;
-use zcash_primitives::transaction::fees::zip317;
+use zcash_primitives::transaction::fees::{
+    FeeRule,
+    transparent::{InputSize, InputView},
+    zip317,
+};
 use zcash_protocol::{
     TxId,
     consensus::{self, BlockHeight, COINBASE_MATURITY_BLOCKS},
@@ -66,8 +71,17 @@ use crate::{
     AccountRef, AccountUuid, AddressRef, TxRef, UtxoId,
     error::SqliteClientError,
     util::Clock,
-    wallet::{common::tx_unexpired_condition, get_account, mempool_height},
+    wallet::{
+        common::{
+            output_eligible_condition, overridable_owners_rarray, push_lock_params,
+            tx_unexpired_condition,
+        },
+        get_account, mempool_height,
+    },
 };
+// Used only by the value-target transparent selection, which is gated on transparent inputs.
+#[cfg(feature = "transparent-inputs")]
+use crate::wallet::common::locked_tier_order_key;
 
 pub(crate) mod ephemeral;
 
@@ -208,8 +222,7 @@ pub(crate) fn get_transparent_receivers<P: consensus::Parameters>(
             .map(|address_index| {
                 NonHardenedChildIndex::from_index(address_index).ok_or(
                     SqliteClientError::CorruptedData(format!(
-                        "{} is not a valid transparent child index",
-                        address_index
+                        "{address_index} is not a valid transparent child index"
                     )),
                 )
             })
@@ -272,7 +285,7 @@ pub(crate) fn get_transparent_receivers<P: consensus::Parameters>(
                                     })
                                 })?;
                         let pubkey = PublicKey::from_bytes(pubkey_bytes).map_err(|e| {
-                            SqliteClientError::CorruptedData(format!("Invalid public key: {}", e))
+                            SqliteClientError::CorruptedData(format!("Invalid public key: {e}"))
                         })?;
                         Ok(TransparentAddressMetadata::standalone_p2pkh(
                             pubkey,
@@ -309,8 +322,7 @@ pub(crate) fn get_transparent_receivers<P: consensus::Parameters>(
                     let imported_transparent_receiver_script =
                         script::Redeem::parse(&Code(rs_bytes.clone())).map_err(|e| {
                             SqliteClientError::CorruptedData(format!(
-                                "Invalid redeem script: {:?}",
-                                e
+                                "Invalid redeem script: {e:?}"
                             ))
                         })?;
 
@@ -1260,6 +1272,9 @@ pub(crate) fn excluding_immature_coinbase_outputs(tx: &str) -> String {
 }
 /// Get information about a transparent output controlled by the wallet.
 ///
+/// This is a direct lookup by `outpoint`, not a selection query, so it does not filter on lock
+/// state: a locked output that is otherwise unspent and unexpired is still returned.
+///
 /// # Parameters
 /// - `outpoint`: The identifier for the output to be retrieved.
 /// - `target_height`: The target height of a transaction under construction that will spend the
@@ -1297,23 +1312,84 @@ pub(crate) fn get_wallet_transparent_output(
          )",
         tx_unexpired_condition("t"),
         spent_utxos_clause(),
-        excluding_wallet_internal_ephemeral_outputs("u", "addresses", "t", "accounts")
+        excluding_wallet_internal_ephemeral_outputs("u", "addresses", "t", "accounts"),
     ))?;
 
+    let txid_bytes = outpoint.hash();
+    let output_index = outpoint.n();
+    let target_height_arg = target_height.map(u32::from);
+    let allow_unspendable = target_height.is_none();
+    let sql_params: Vec<(&str, &dyn ToSql)> = vec![
+        (":txid", &txid_bytes),
+        (":output_index", &output_index),
+        (":target_height", &target_height_arg),
+        (":allow_unspendable", &allow_unspendable),
+    ];
+
     let result: Result<Option<WalletTransparentOutput<_>>, SqliteClientError> = stmt_select_utxo
-        .query_and_then(
-            named_params![
-                ":txid": outpoint.hash(),
-                ":output_index": outpoint.n(),
-                ":target_height": target_height.map(u32::from),
-                ":allow_unspendable": target_height.is_none(),
-            ],
-            |row| to_unspent_transparent_output(conn, row),
-        )?
+        .query_and_then(&sql_params[..], |row| {
+            to_unspent_transparent_output(conn, row)
+        })?
         .next()
         .transpose();
 
     result
+}
+
+/// Builds the SQL query body shared by `get_spendable_transparent_outputs[_for_addresses]`
+/// and `select_spendable_transparent_outputs`.
+///
+/// The query body is parameterized over the address-predicate SQL fragment, the lock-eligibility
+/// fragment (see [`output_eligible_condition`]), and the `ORDER BY` fragment, so callers can match
+/// on a single address, a set of addresses, or an account; and can order by address+index
+/// (per-address determinism) or by value descending (value-bounded selection), optionally prefixed
+/// with a lock-tier preference key.
+fn spendable_transparent_outputs_query(
+    address_predicate_sql: &str,
+    lock_eligible_sql: &str,
+    order_by_sql: &str,
+) -> String {
+    format!(
+        "SELECT t.txid, u.output_index, u.script,
+                u.value_zat, addresses.key_scope,
+                accounts.uuid AS account_uuid,
+                u.transaction_id AS creating_tx_id,
+                addresses.imported_transparent_receiver_script,
+                t.mined_height AS received_height
+         FROM transparent_received_outputs u
+         JOIN transactions t ON t.id_tx = u.transaction_id
+         JOIN accounts ON accounts.id = u.account_id
+         JOIN addresses ON addresses.id = u.address_id
+         WHERE {address_predicate_sql}
+         AND u.value_zat > :min_value
+         AND ({}) -- the transaction is mined or unexpired with minconf 0
+         AND u.id NOT IN ({}) -- and the output is unspent
+         AND ({}) -- exclude likely-spent wallet-internal ephemeral outputs
+         AND ({}) -- exclude immature coinbase outputs
+         AND (
+             :coinbase_filter == 0
+             OR (:coinbase_filter == 1 AND IFNULL(t.tx_index, 1) == 0)
+             OR (:coinbase_filter == 2 AND IFNULL(t.tx_index, 1) != 0)
+         ) -- coinbase filter: 0 = all, 1 = coinbase-only, 2 = non-coinbase-only;
+           -- unknown tx_index defaults to 1 (non-coinbase) to avoid false positives,
+           -- so such outputs are excluded by CoinbaseOnly and included by NonCoinbaseOnly
+         AND ({lock_eligible_sql}) -- the output is eligible under the lock filter
+         ORDER BY {order_by_sql}",
+        tx_unexpired_condition_minconf_0("t"),
+        spent_utxos_clause(),
+        excluding_wallet_internal_ephemeral_outputs("u", "addresses", "t", "accounts"),
+        excluding_immature_coinbase_outputs("t"),
+    )
+}
+
+/// Encodes the common `CoinbaseFilter` encoding used by the transparent-output SQL queries:
+/// 0 = all transparent outputs, 1 = coinbase outputs only, 2 = non-coinbase outputs only.
+fn coinbase_filter_encoding(output_filter: CoinbaseFilter) -> i32 {
+    match output_filter {
+        CoinbaseFilter::AllTransparentOutputs => 0i32,
+        CoinbaseFilter::CoinbaseOnly => 1i32,
+        CoinbaseFilter::NonCoinbaseOnly => 2i32,
+    }
 }
 
 /// Returns the list of spendable transparent outputs received by this wallet at `address`
@@ -1336,7 +1412,8 @@ pub(crate) fn get_spendable_transparent_outputs<P: consensus::Parameters>(
     address: &TransparentAddress,
     target_height: TargetHeight,
     confirmations_policy: ConfirmationsPolicy,
-    output_filter: TransparentOutputFilter,
+    output_filter: CoinbaseFilter,
+    lock_filter: LockFilter<'_>,
 ) -> Result<Vec<WalletTransparentOutput<AccountUuid>>, SqliteClientError> {
     // Defer to the batched query with a singleton address set, so that there is a single query
     // body to maintain. `transparent_received_outputs.address` is always equal to the
@@ -1351,6 +1428,7 @@ pub(crate) fn get_spendable_transparent_outputs<P: consensus::Parameters>(
         target_height,
         confirmations_policy,
         output_filter,
+        lock_filter,
     )
 }
 
@@ -1373,40 +1451,21 @@ pub(crate) fn get_spendable_transparent_outputs_for_addresses<P: consensus::Para
     addresses: &[TransparentAddress],
     target_height: TargetHeight,
     confirmations_policy: ConfirmationsPolicy,
-    output_filter: TransparentOutputFilter,
+    output_filter: CoinbaseFilter,
+    lock_filter: LockFilter<'_>,
 ) -> Result<Vec<WalletTransparentOutput<AccountUuid>>, SqliteClientError> {
     if addresses.is_empty() {
         return Ok(vec![]);
     }
 
-    let coinbase_only = match output_filter {
-        TransparentOutputFilter::All => 0i32,
-        TransparentOutputFilter::CoinbaseOnly => 1i32,
-    };
+    let coinbase_filter = coinbase_filter_encoding(output_filter);
 
-    let mut stmt_utxos = conn.prepare_cached(&format!(
-        "SELECT t.txid, u.output_index, u.script,
-                u.value_zat, addresses.key_scope,
-                accounts.uuid AS account_uuid,
-                u.transaction_id AS creating_tx_id,
-                addresses.imported_transparent_receiver_script,
-                t.mined_height AS received_height
-         FROM transparent_received_outputs u
-         JOIN transactions t ON t.id_tx = u.transaction_id
-         JOIN accounts ON accounts.id = u.account_id
-         JOIN addresses ON addresses.id = u.address_id
-         WHERE addresses.cached_transparent_receiver_address IN rarray(:addresses)
-         AND u.value_zat > :min_value
-         AND ({}) -- the transaction is mined or unexpired with minconf 0
-         AND u.id NOT IN ({}) -- and the output is unspent
-         AND ({}) -- exclude likely-spent wallet-internal ephemeral outputs
-         AND ({}) -- exclude immature coinbase outputs
-         AND (:coinbase_only == 0 OR IFNULL(t.tx_index, 1) == 0) -- coinbase filter: unknown tx_index defaults to 1 (non-coinbase) to avoid false positives
-         ORDER BY addresses.cached_transparent_receiver_address, u.output_index",
-        tx_unexpired_condition_minconf_0("t"),
-        spent_utxos_clause(),
-        excluding_wallet_internal_ephemeral_outputs("u", "addresses", "t", "accounts"),
-        excluding_immature_coinbase_outputs("t"),
+    // This returns all matching outputs (no value target), so only the eligibility filter
+    // (Part A) applies; no lock-tier ordering is imposed.
+    let mut stmt_utxos = conn.prepare_cached(&spendable_transparent_outputs_query(
+        "addresses.cached_transparent_receiver_address IN rarray(:addresses)",
+        &output_eligible_condition(lock_filter, "u"),
+        "addresses.cached_transparent_receiver_address, u.output_index",
     ))?;
 
     // We treat all transparent UTXOs as untrusted; however, if zero-conf shielding
@@ -1423,32 +1482,190 @@ pub(crate) fn get_spendable_transparent_outputs_for_addresses<P: consensus::Para
         .collect();
     let addresses_ptr = Rc::new(address_values);
 
-    let mut rows = stmt_utxos.query(named_params![
-        ":addresses": &addresses_ptr,
-        ":target_height": u32::from(target_height),
-        ":min_confirmations": min_confirmations,
-        ":min_value": u64::from(zip317::MARGINAL_FEE),
-        ":coinbase_only": coinbase_only,
-    ])?;
+    let target_height_arg = u32::from(target_height);
+    let min_value = u64::from(zip317::MARGINAL_FEE);
+    let overridable_owners = overridable_owners_rarray(lock_filter);
+    let mut sql_params: Vec<(&str, &dyn ToSql)> = vec![
+        (":addresses", &addresses_ptr),
+        (":target_height", &target_height_arg),
+        (":min_confirmations", &min_confirmations),
+        (":min_value", &min_value),
+        (":coinbase_filter", &coinbase_filter),
+    ];
+    push_lock_params(&mut sql_params, lock_filter, &overridable_owners);
+
+    let mut rows = stmt_utxos.query(&sql_params[..])?;
 
     let mut utxos = Vec::<WalletTransparentOutput<_>>::new();
     while let Some(row) = rows.next()? {
         let mut output = to_unspent_transparent_output(conn, row)?;
-
         // If the address has a redeem script, compute the known input size for fee
         // estimation so that the ZIP 317 fee calculator can handle P2SH inputs.
-        let imported_transparent_receiver_script_bytes: Option<Vec<u8>> =
-            row.get("imported_transparent_receiver_script")?;
-        if let Some(rs_bytes) = imported_transparent_receiver_script_bytes {
-            if let Ok(from_chain) = script::FromChain::parse(&script::Code(rs_bytes)) {
-                if let Some(input_size) =
-                    transparent::builder::p2sh_input_serialized_len(&from_chain)
-                {
-                    output = output.with_known_input_size(input_size);
-                }
+        if let Ok(Some(rs_bytes)) =
+            row.get::<_, Option<Vec<u8>>>("imported_transparent_receiver_script")
+            && let Ok(from_chain) = script::FromChain::parse(&script::Code(rs_bytes))
+            && let Some(input_size) = transparent::builder::p2sh_input_serialized_len(&from_chain)
+        {
+            output = output.with_known_input_size(input_size);
+        }
+        utxos.push(output);
+    }
+
+    Ok(utxos)
+}
+
+/// Returns the spendable transparent outputs received by the given `account` whose total
+/// post-fee value (sum of values minus the cumulative marginal fee cost of the gathered
+/// inputs themselves, per `fee_rule`) is at least `target_value`, or `max_inputs` outputs
+/// (whichever is reached first).
+///
+/// The query is a single SQL statement that orders eligible UTXOs by descending value (using
+/// the `idx_transparent_received_outputs_value_zat` index) and lets the Rust side accumulate
+/// values until the post-fee bound (or the `max_inputs` cap) is met. This bounds the work
+/// done in SQLite to the prefix of the table that can possibly satisfy the request, which is
+/// important for wallets that hold large numbers of transparent UTXOs (e.g. a recovered
+/// `zcashd` import).
+///
+/// The cumulative fee is recomputed via `fee_rule` at each step. To keep this loop linear in
+/// the number of UTXOs examined (rather than quadratic), we maintain a running total of the
+/// serialized transparent input sizes seen so far and pass that single collapsed total to
+/// `FeeRule::fee_required` on each iteration, rather than re-summing the whole prefix each
+/// time. This is valid for ZIP 317, whose transparent-input fee contribution depends only on
+/// the sum of input sizes.
+///
+/// For `TargetValue::AllFunds`, no value bound is applied and the gather returns every
+/// eligible output up to `max_inputs`.
+///
+/// When `address_allow_list` is `Some`, the eligible set is additionally restricted (within
+/// the query, so that ineligible outputs do not consume the value bound) to outputs received
+/// at one of the given transparent addresses.
+#[cfg(feature = "transparent-inputs")]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn select_spendable_transparent_outputs<P: consensus::Parameters>(
+    conn: &rusqlite::Connection,
+    params: &P,
+    account: AccountUuid,
+    target_height: TargetHeight,
+    confirmations_policy: ConfirmationsPolicy,
+    output_filter: CoinbaseFilter,
+    address_allow_list: Option<&[TransparentAddress]>,
+    target_value: TargetValue,
+    max_inputs: usize,
+    fee_rule: &StandardFeeRule,
+    lock_filter: LockFilter<'_>,
+) -> Result<Vec<WalletTransparentOutput<AccountUuid>>, SqliteClientError> {
+    // The post-fee bound for `TargetValue::AtLeast`. `TargetValue::AllFunds` has no bound; we
+    // return every eligible output in that case.
+    let target_zat: Option<u64> = match target_value {
+        TargetValue::AtLeast(z) => Some(u64::from(z)),
+        TargetValue::AllFunds(_) => None,
+    };
+
+    let coinbase_filter = coinbase_filter_encoding(output_filter);
+
+    // This gathers outputs greedily in `ORDER BY` order until the value target is met, so a
+    // `LockFilter::Policy` that prefers one lock tier prefixes the value ordering with a lock-tier
+    // key (Part B): the preferred tier is drawn upon first, with value-descending order retained as
+    // a secondary key within each tier. For `Exclude`/`Unfiltered` the ordering is unchanged.
+    let order_by_sql = match locked_tier_order_key(lock_filter, "u") {
+        Some(tier_key) => format!("{tier_key}, u.value_zat DESC, u.output_index"),
+        None => "u.value_zat DESC, u.output_index".to_string(),
+    };
+
+    // `:has_address_allow_list` and `:addresses` are always bound (the latter to an empty
+    // array when there is no allow list), following the same always-bound-flag idiom as
+    // `:coinbase_filter`, so that there is a single query text regardless of whether an
+    // allow list is present.
+    let mut stmt_utxos = conn.prepare_cached(&spendable_transparent_outputs_query(
+        "accounts.uuid = :account_uuid
+         AND (
+             :has_address_allow_list = 0
+             OR addresses.cached_transparent_receiver_address IN rarray(:addresses)
+         )",
+        &output_eligible_condition(lock_filter, "u"),
+        &order_by_sql,
+    ))?;
+
+    // We treat all transparent UTXOs as untrusted; however, if zero-conf shielding
+    // is enabled, we set the minimum number of confirmations to zero.
+    let min_confirmations = if confirmations_policy.allow_zero_conf_shielding() {
+        0u32
+    } else {
+        u32::from(confirmations_policy.untrusted())
+    };
+
+    let address_values: Vec<Value> = address_allow_list
+        .unwrap_or(&[])
+        .iter()
+        .map(|addr| Value::Text(addr.encode(params)))
+        .collect();
+    let addresses_ptr = Rc::new(address_values);
+
+    let account_uuid = account.0;
+    let target_height_arg = u32::from(target_height);
+    let min_value = u64::from(zip317::MARGINAL_FEE);
+    let has_address_allow_list = address_allow_list.is_some();
+    let overridable_owners = overridable_owners_rarray(lock_filter);
+    let mut sql_params: Vec<(&str, &dyn ToSql)> = vec![
+        (":account_uuid", &account_uuid),
+        (":target_height", &target_height_arg),
+        (":min_confirmations", &min_confirmations),
+        (":min_value", &min_value),
+        (":coinbase_filter", &coinbase_filter),
+        (":has_address_allow_list", &has_address_allow_list),
+        (":addresses", &addresses_ptr),
+    ];
+    push_lock_params(&mut sql_params, lock_filter, &overridable_owners);
+
+    let mut rows = stmt_utxos.query(&sql_params[..])?;
+
+    let mut utxos = Vec::<WalletTransparentOutput<_>>::new();
+    let mut accumulated_value: u64 = 0;
+    // Running total of the serialized size of the transparent inputs gathered so far.
+    // Maintained incrementally so that the fee re-computation below is O(1) per candidate
+    // UTXO rather than O(prefix length), keeping the overall gather linear.
+    let mut cumulative_input_size: usize = 0;
+    while let Some(row) = rows.next()? {
+        // Stop once the cap on the number of transparent inputs is reached, regardless of
+        // whether the value target has been met. This bounds the size of the resulting
+        // transaction independent of `target_value`, since a wallet holding a very large
+        // number of small (e.g. dust) UTXOs could otherwise require an unbounded number of
+        // inputs to satisfy even a modest request.
+        if utxos.len() >= max_inputs {
+            break;
+        }
+
+        let output = to_unspent_transparent_output(conn, row)?;
+
+        // If we have a target bound, stop once the post-fee accumulated value reaches it.
+        if let Some(target) = target_zat {
+            let cumulative_fee = fee_rule
+                .fee_required(
+                    params,
+                    BlockHeight::from(target_height),
+                    [InputSize::Known(cumulative_input_size)],
+                    std::iter::empty::<usize>(),
+                    0,
+                    0,
+                    0,
+                    0,
+                )
+                .map_err(SqliteClientError::from)?;
+            if accumulated_value.saturating_sub(u64::from(cumulative_fee)) >= target {
+                break;
             }
         }
 
+        let input_size = match output.serialized_size() {
+            InputSize::Known(size) => size,
+            // Fall back to the standard P2PKH size for inputs whose exact serialized size is
+            // not known (e.g. a P2SH output with an unrecognized redeem script). This is an
+            // estimate for the purposes of this gather only; the real fee is computed by the
+            // caller's actual change strategy once the transaction is built.
+            InputSize::Unknown(_) => zip317::P2PKH_STANDARD_INPUT_SIZE,
+        };
+        cumulative_input_size += input_size;
+        accumulated_value = accumulated_value.saturating_add(u64::from(output.value()));
         utxos.push(output);
     }
 
@@ -1479,19 +1696,19 @@ pub(crate) fn get_transparent_balances<P: consensus::Parameters>(
     let mut result = HashMap::new();
 
     let mut stmt_address_balances = conn.prepare(&format!(
-        "SELECT u.address, u.value_zat, addresses.key_scope
+        "SELECT u.address, u.value_zat, u.lock_expiry_height, addresses.key_scope
          FROM transparent_received_outputs u
          JOIN accounts ON accounts.id = u.account_id
          JOIN transactions t ON t.id_tx = u.transaction_id
          JOIN addresses ON addresses.id = u.address_id
          WHERE accounts.uuid = :account_uuid
          AND u.value_zat > 0
-         AND ({}) -- the transaction is mined or unexpired with minconf 0
+         AND ({}) -- the output is mined with sufficient confirmations, or is unexpired and minconf is 0
          AND u.id NOT IN ({}) -- and the output is unspent
          AND ({}) -- exclude likely-spent wallet-internal ephemeral outputs",
         tx_unexpired_condition_minconf_0("t"),
         spent_utxos_clause(),
-        excluding_wallet_internal_ephemeral_outputs("u", "addresses", "t", "accounts")
+        excluding_wallet_internal_ephemeral_outputs("u", "addresses", "t", "accounts"),
     ))?;
 
     let mut rows = stmt_address_balances.query(named_params![
@@ -1504,20 +1721,31 @@ pub(crate) fn get_transparent_balances<P: consensus::Parameters>(
         let taddr_str: String = row.get("address")?;
         let taddr = TransparentAddress::decode(params, &taddr_str)?;
         let value = Zatoshis::from_nonnegative_i64(row.get("value_zat")?)?;
+        let lock_expiry_height: Option<u32> = row.get("lock_expiry_height")?;
         let key_scope_code: i64 = row.get("key_scope")?;
         let key_origin = KeyScope::decode(key_scope_code)?.as_key_origin();
 
         let entry = result.entry(taddr).or_insert((key_origin, Balance::ZERO));
         if value <= zip317::MARGINAL_FEE {
             entry.1.add_uneconomic_value(value)?;
+        } else if lock_expiry_height
+            .iter()
+            .any(|h| *h >= u32::from(target_height))
+        {
+            entry.1.add_locked_value(value)?;
         } else {
             entry.1.add_spendable_value(value)?;
         }
     }
 
+    // Compute pending spendable balance.
+    //
     // Pending spendable balance for transparent UTXOs is only relevant for min_confirmations > 0;
     // with min_confirmations == 0, zero-conf spends are allowed and therefore the value will
-    // appear in the spendable balance and we don't want to double-count it.
+    // appear in the spendable balance and we don't want to also count it as pending.
+    //
+    // For pending value, we can ignore locking considerations until the balance is no longer
+    // pending, so we don't check locking here.
     if min_confirmations > 0 {
         let mut stmt_address_balances = conn.prepare(&format!(
             "SELECT u.address, u.value_zat, addresses.key_scope
@@ -1587,7 +1815,10 @@ pub(crate) fn add_transparent_account_balances(
     };
 
     let mut stmt_account_spendable_balances = conn.prepare(&format!(
-        "SELECT accounts.uuid, SUM(u.value_zat)
+        "SELECT accounts.uuid, u.lock_expiry_height, SUM(u.value_zat),
+            (IFNULL(t.tx_index, 1) == 0) AS is_coinbase,
+            (t.mined_height IS NOT NULL
+             AND :target_height - t.mined_height >= {COINBASE_MATURITY_BLOCKS}) AS is_mature
          FROM transparent_received_outputs u
          JOIN accounts ON accounts.id = u.account_id
          JOIN transactions t ON t.id_tx = u.transaction_id
@@ -1595,10 +1826,10 @@ pub(crate) fn add_transparent_account_balances(
          WHERE ({}) -- the transaction is mined or unexpired with minconf 0
          AND u.id NOT IN ({}) -- and the received txo is unspent
          AND ({}) -- exclude likely-spent wallet-internal ephemeral outputs
-         GROUP BY accounts.uuid",
+         GROUP BY accounts.uuid, lock_expiry_height, is_coinbase, is_mature",
         tx_unexpired_condition_minconf_0("t"),
         spent_utxos_clause(),
-        excluding_wallet_internal_ephemeral_outputs("u", "addresses", "t", "accounts")
+        excluding_wallet_internal_ephemeral_outputs("u", "addresses", "t", "accounts"),
     ))?;
 
     let mut rows = stmt_account_spendable_balances.query(named_params![
@@ -1608,21 +1839,51 @@ pub(crate) fn add_transparent_account_balances(
 
     while let Some(row) = rows.next()? {
         let account = AccountUuid(row.get(0)?);
-        let raw_value = row.get(1)?;
+        let lock_expiry_height: Option<u32> = row.get(1)?;
+        let raw_value = row.get(2)?;
         let value = Zatoshis::from_nonnegative_i64(raw_value).map_err(|_| {
             SqliteClientError::CorruptedData(format!("Negative UTXO value {raw_value:?}"))
         })?;
+        let is_coinbase: bool = row.get("is_coinbase")?;
+        let is_mature: bool = row.get("is_mature")?;
 
-        account_balances
+        let balance = account_balances
             .entry(account)
-            .or_insert(AccountBalance::ZERO)
-            .with_unshielded_balance_mut(|bal| {
+            .or_insert(AccountBalance::ZERO);
+        if is_coinbase {
+            balance.with_unshielded_coinbase_balance_mut(|bal| {
                 if value <= zip317::MARGINAL_FEE {
                     bal.add_uneconomic_value(value)
+                } else if lock_expiry_height
+                    .iter()
+                    .any(|h| *h >= u32::from(target_height))
+                {
+                    // A locked coinbase output (selected by an in-flight shielding
+                    // proposal) is excluded from the spendable balance, exactly like a
+                    // locked non-coinbase output.
+                    bal.add_locked_value(value)
+                } else if is_mature {
+                    bal.add_spendable_value(value)
+                } else {
+                    // Immature coinbase value may not yet be spent (by shielding); report it
+                    // as pending until the coinbase output reaches maturity.
+                    bal.add_pending_spendable_value(value)
+                }
+            })?;
+        } else {
+            balance.with_unshielded_regular_balance_mut(|bal| {
+                if value <= zip317::MARGINAL_FEE {
+                    bal.add_uneconomic_value(value)
+                } else if lock_expiry_height
+                    .iter()
+                    .any(|h| *h >= u32::from(target_height))
+                {
+                    bal.add_locked_value(value)
                 } else {
                     bal.add_spendable_value(value)
                 }
             })?;
+        }
     }
 
     // Pending spendable balance for transparent UTXOs is only relevant for min_confirmations > 0;
@@ -1631,7 +1892,8 @@ pub(crate) fn add_transparent_account_balances(
     // TODO (#1592): Ability to distinguish between Transparent pending change and pending non-change
     if min_confirmations > 0 {
         let mut stmt_account_unconfirmed_balances = conn.prepare(&format!(
-            "SELECT accounts.uuid, SUM(u.value_zat)
+            "SELECT accounts.uuid, u.lock_expiry_height, SUM(u.value_zat),
+                (IFNULL(t.tx_index, 1) == 0) AS is_coinbase
              FROM transparent_received_outputs u
              JOIN accounts ON accounts.id = u.account_id
              JOIN transactions t ON t.id_tx = u.transaction_id
@@ -1650,9 +1912,9 @@ pub(crate) fn add_transparent_account_balances(
              )
              AND u.id NOT IN ({}) -- and the received txo is unspent
              AND ({}) -- exclude likely-spent wallet-internal ephemeral outputs
-             GROUP BY accounts.uuid",
+             GROUP BY accounts.uuid, lock_expiry_height, is_coinbase",
             spent_utxos_clause(),
-            excluding_wallet_internal_ephemeral_outputs("u", "addresses", "t", "accounts")
+            excluding_wallet_internal_ephemeral_outputs("u", "addresses", "t", "accounts"),
         ))?;
 
         let mut rows = stmt_account_unconfirmed_balances.query(named_params![
@@ -1662,21 +1924,33 @@ pub(crate) fn add_transparent_account_balances(
 
         while let Some(row) = rows.next()? {
             let account = AccountUuid(row.get(0)?);
-            let raw_value = row.get(1)?;
+            let lock_expiry_height: Option<u32> = row.get(1)?;
+            let raw_value = row.get(2)?;
             let value = Zatoshis::from_nonnegative_i64(raw_value).map_err(|_| {
                 SqliteClientError::CorruptedData(format!("Negative UTXO value {raw_value:?}"))
             })?;
+            let is_coinbase: bool = row.get("is_coinbase")?;
 
-            account_balances
+            let add_pending = |bal: &mut Balance| {
+                if value <= zip317::MARGINAL_FEE {
+                    bal.add_uneconomic_value(value)
+                } else if lock_expiry_height
+                    .iter()
+                    .any(|h| *h >= u32::from(target_height))
+                {
+                    bal.add_locked_value(value)
+                } else {
+                    bal.add_pending_spendable_value(value)
+                }
+            };
+            let balance = account_balances
                 .entry(account)
-                .or_insert(AccountBalance::ZERO)
-                .with_unshielded_balance_mut(|bal| {
-                    if value <= zip317::MARGINAL_FEE {
-                        bal.add_uneconomic_value(value)
-                    } else {
-                        bal.add_pending_spendable_value(value)
-                    }
-                })?;
+                .or_insert(AccountBalance::ZERO);
+            if is_coinbase {
+                balance.with_unshielded_coinbase_balance_mut(add_pending)?;
+            } else {
+                balance.with_unshielded_regular_balance_mut(add_pending)?;
+            }
         }
     }
     Ok(())
@@ -2251,8 +2525,7 @@ pub(crate) fn get_transparent_address_metadata<P: consensus::Parameters>(
                                     let imported_transparent_receiver_script =
                                         script::Redeem::parse(&Code(rs_bytes.clone())).map_err(|e| {
                                             SqliteClientError::CorruptedData(format!(
-                                                "Invalid redeem script: {:?}",
-                                                e
+                                                "Invalid redeem script: {e:?}"
                                             ))
                                         })?;
 
@@ -2307,16 +2580,15 @@ pub(crate) fn get_transparent_address_metadata<P: consensus::Parameters>(
 
     if let Some((legacy_taddr, address_index)) =
         get_legacy_transparent_address(params, conn, account_uuid)?
+        && &legacy_taddr == address
     {
-        if &legacy_taddr == address {
-            let metadata = TransparentAddressMetadata::derived(
-                Scope::External.into(),
-                address_index,
-                Exposure::CannotKnow,
-                None,
-            );
-            return Ok(Some(metadata));
-        }
+        let metadata = TransparentAddressMetadata::derived(
+            Scope::External.into(),
+            address_index,
+            Exposure::CannotKnow,
+            None,
+        );
+        return Ok(Some(metadata));
     }
 
     Ok(None)
@@ -2362,10 +2634,10 @@ pub(crate) fn find_account_uuid_for_transparent_address<P: consensus::Parameters
     // look up the legacy address for each account in the wallet, and check whether it
     // matches the address for the received UTXO.
     for &account_id in account_ids.iter() {
-        if let Some((legacy_taddr, _)) = get_legacy_transparent_address(params, conn, account_id)? {
-            if &legacy_taddr == address {
-                return Ok(Some((account_id, KeyScope::EXTERNAL)));
-            }
+        if let Some((legacy_taddr, _)) = get_legacy_transparent_address(params, conn, account_id)?
+            && &legacy_taddr == address
+        {
+            return Ok(Some((account_id, KeyScope::EXTERNAL)));
         }
     }
 
@@ -2620,6 +2892,13 @@ mod tests {
         );
     }
 
+    #[test]
+    fn transparent_note_locking() {
+        zcash_client_backend::data_api::testing::transparent::transparent_note_locking(
+            TestDbFactory::default(),
+        );
+    }
+
     /// Re-storing a transparent output with an unknown mined height (`None`) must not discard
     /// the mined height already recorded for its transaction. A `None` height means "we do not
     /// yet know this to have been mined" — for example, an output re-observed via the mempool
@@ -2743,8 +3022,103 @@ mod tests {
     }
 
     #[test]
+    fn propose_t2t_shielded_only_is_insufficient() {
+        zcash_client_backend::data_api::testing::transparent::propose_t2t_shielded_only_is_insufficient(
+            TestDbFactory::default(),
+            BlockCache::new(),
+        );
+    }
+
+    #[test]
+    fn propose_t2t_any_account_taddr() {
+        zcash_client_backend::data_api::testing::transparent::propose_t2t_any_account_taddr(
+            TestDbFactory::default(),
+            BlockCache::new(),
+        );
+    }
+
+    #[test]
+    fn propose_t2t_from_addresses() {
+        zcash_client_backend::data_api::testing::transparent::propose_t2t_from_addresses(
+            TestDbFactory::default(),
+            BlockCache::new(),
+        );
+    }
+
+    #[test]
+    fn reserve_next_n_internal_addresses_gap_limit() {
+        zcash_client_backend::data_api::testing::transparent::reserve_next_n_internal_addresses_gap_limit(
+            TestDbFactory::default(),
+            BlockCache::new(),
+            |e, _, expected_bad_index| {
+                matches!(
+                    e,
+                    SqliteClientError::ReachedGapLimit(scope, bad_index)
+                    if scope == &TransparentKeyScope::INTERNAL && bad_index == &expected_bad_index
+                )
+            },
+        );
+    }
+
+    #[test]
+    fn propose_t2t_with_transparent_change() {
+        zcash_client_backend::data_api::testing::transparent::propose_t2t_with_transparent_change(
+            TestDbFactory::default(),
+            BlockCache::new(),
+        );
+    }
+
+    #[test]
+    fn propose_t2t_transparent_change_exact_match() {
+        zcash_client_backend::data_api::testing::transparent::propose_t2t_transparent_change_exact_match(
+            TestDbFactory::default(),
+            BlockCache::new(),
+        );
+    }
+
+    #[test]
+    fn propose_t2shielded_requires_transparent_regather() {
+        zcash_client_backend::data_api::testing::transparent::propose_t2shielded_requires_transparent_regather(
+            TestDbFactory::default(),
+            BlockCache::new(),
+        );
+    }
+
+    #[test]
+    fn propose_transfer_transparent_input_cap() {
+        zcash_client_backend::data_api::testing::transparent::propose_transfer_transparent_input_cap(
+            TestDbFactory::default(),
+            BlockCache::new(),
+        );
+    }
+
+    #[test]
+    fn value_bounded_transparent_gather() {
+        zcash_client_backend::data_api::testing::transparent::value_bounded_transparent_gather(
+            TestDbFactory::default(),
+            BlockCache::new(),
+        );
+    }
+
+    #[test]
     fn transparent_balance_spendability() {
         zcash_client_backend::data_api::testing::transparent::transparent_balance_spendability(
+            TestDbFactory::default(),
+            BlockCache::new(),
+        );
+    }
+
+    #[test]
+    fn transparent_coinbase_balance_split() {
+        zcash_client_backend::data_api::testing::transparent::transparent_coinbase_balance_split(
+            TestDbFactory::default(),
+            BlockCache::new(),
+        );
+    }
+
+    #[test]
+    fn transparent_coinbase_balance_dust() {
+        zcash_client_backend::data_api::testing::transparent::transparent_coinbase_balance_dust(
             TestDbFactory::default(),
             BlockCache::new(),
         );
@@ -3031,6 +3405,279 @@ mod tests {
         )
         .unwrap();
         tx.commit().unwrap();
+    }
+
+    /// Importing a standalone (`Foreign`) receiver whose address is already present as a derived
+    /// account receiver inserts nothing (returns 0) rather than failing the transparent-receiver
+    /// uniqueness invariant. This is the import-direction counterpart of
+    /// `store_address_range_upgrades_imported_receiver`.
+    #[test]
+    #[cfg(feature = "transparent-key-import")]
+    fn import_standalone_transparent_pubkey_noop_when_address_derived() {
+        use proptest::prelude::*;
+        use rusqlite::named_params;
+        use secp256k1::{PublicKey, Secp256k1, SecretKey};
+        use transparent::address::TransparentAddress;
+        use zcash_keys::{address::Address, encoding::AddressCodec};
+
+        proptest!(
+            ProptestConfig::with_cases(16),
+            |(
+                sk in any::<[u8; 32]>()
+                    .prop_filter_map("valid secp256k1 secret key", |b| SecretKey::from_slice(&b).ok()),
+                // Above the account's default external gap (10) so store_address_range actually
+                // inserts our receiver rather than skipping an already-derived index.
+                child_index in 16u32..0x8000_0000u32,
+            )| {
+                let st = TestBuilder::new()
+                    .with_data_store_factory(TestDbFactory::default())
+                    .with_account_from_sapling_activation(BlockHash([0; 32]))
+                    .build();
+
+                let account_uuid = st.test_account().unwrap().id();
+                let network = *st.network();
+
+                // A real pubkey and the transparent receiver it hashes to.
+                let pubkey = PublicKey::from_secret_key(&Secp256k1::new(), &sk);
+                let taddr = TransparentAddress::from_pubkey(&pubkey);
+                let taddr_enc = taddr.encode(&network);
+                let child = NonHardenedChildIndex::from_index(child_index).unwrap();
+
+                let tx = st.wallet().db().conn.unchecked_transaction().unwrap();
+                let account_id = get_account_ref(&tx, account_uuid).unwrap();
+
+                // Derive the receiver into `addresses` (as the account-import path would), so a
+                // row with a NULL `imported_transparent_receiver_pubkey` already holds this
+                // receiver address.
+                super::store_address_range(
+                    &tx,
+                    &network,
+                    account_id,
+                    TransparentKeyScope::EXTERNAL,
+                    vec![(Address::from(taddr), taddr, child)],
+                )
+                .unwrap();
+
+                // Importing the same receiver as a standalone pubkey inserts nothing: the pubkey
+                // lookup does not match the derived (NULL-pubkey) row, but the address-existence
+                // check does.
+                let inserted = crate::wallet::import_standalone_transparent_pubkey(
+                    &tx,
+                    &network,
+                    account_uuid,
+                    pubkey,
+                )
+                .unwrap();
+                prop_assert_eq!(inserted, 0);
+
+                // Exactly one row remains for the receiver.
+                let count: i64 = tx
+                    .query_row(
+                        "SELECT COUNT(*) FROM addresses \
+                         WHERE cached_transparent_receiver_address = :taddr",
+                        named_params! { ":taddr": &taddr_enc },
+                        |r| r.get(0),
+                    )
+                    .unwrap();
+                prop_assert_eq!(count, 1);
+            }
+        );
+    }
+
+    /// Importing a standalone receiver that is not yet recorded inserts exactly one row (returns
+    /// 1); importing the same pubkey again is a no-op (returns 0). Together with
+    /// `import_standalone_transparent_pubkey_noop_when_address_derived` this covers both return
+    /// values.
+    #[test]
+    #[cfg(feature = "transparent-key-import")]
+    fn import_standalone_transparent_pubkey_returns_rows_inserted() {
+        use proptest::prelude::*;
+        use rusqlite::named_params;
+        use secp256k1::{PublicKey, Secp256k1, SecretKey};
+        use transparent::address::TransparentAddress;
+        use zcash_keys::encoding::AddressCodec;
+
+        proptest!(
+            ProptestConfig::with_cases(16),
+            |(sk in any::<[u8; 32]>()
+                .prop_filter_map("valid secp256k1 secret key", |b| SecretKey::from_slice(&b).ok()))| {
+                let st = TestBuilder::new()
+                    .with_data_store_factory(TestDbFactory::default())
+                    .with_account_from_sapling_activation(BlockHash([0; 32]))
+                    .build();
+
+                let account_uuid = st.test_account().unwrap().id();
+                let network = *st.network();
+
+                let pubkey = PublicKey::from_secret_key(&Secp256k1::new(), &sk);
+                let taddr_enc = TransparentAddress::from_pubkey(&pubkey).encode(&network);
+
+                let tx = st.wallet().db().conn.unchecked_transaction().unwrap();
+
+                // The receiver is not yet recorded: the first import inserts exactly one row.
+                let inserted = crate::wallet::import_standalone_transparent_pubkey(
+                    &tx,
+                    &network,
+                    account_uuid,
+                    pubkey,
+                )
+                .unwrap();
+                prop_assert_eq!(inserted, 1);
+
+                // Re-importing the same pubkey inserts nothing.
+                let reinserted = crate::wallet::import_standalone_transparent_pubkey(
+                    &tx,
+                    &network,
+                    account_uuid,
+                    pubkey,
+                )
+                .unwrap();
+                prop_assert_eq!(reinserted, 0);
+
+                // Exactly one row exists for the receiver.
+                let count: i64 = tx
+                    .query_row(
+                        "SELECT COUNT(*) FROM addresses \
+                         WHERE cached_transparent_receiver_address = :taddr",
+                        named_params! { ":taddr": &taddr_enc },
+                        |r| r.get(0),
+                    )
+                    .unwrap();
+                prop_assert_eq!(count, 1);
+            }
+        );
+    }
+
+    /// Importing into an account that does not exist returns `AccountUnknown`, resolved
+    /// explicitly up front rather than inferred from a zero-row insert.
+    #[test]
+    #[cfg(feature = "transparent-key-import")]
+    fn import_standalone_transparent_pubkey_unknown_account() {
+        use secp256k1::{PublicKey, Secp256k1, SecretKey};
+
+        let st = TestBuilder::new()
+            .with_data_store_factory(TestDbFactory::default())
+            .with_account_from_sapling_activation(BlockHash([0; 32]))
+            .build();
+
+        let network = *st.network();
+        let pubkey = PublicKey::from_secret_key(
+            &Secp256k1::new(),
+            &SecretKey::from_slice(&[0x11; 32]).unwrap(),
+        );
+
+        // A uuid that matches no account in the wallet.
+        let unknown = crate::AccountUuid::from_uuid(uuid::Uuid::from_bytes([0xff; 16]));
+
+        let tx = st.wallet().db().conn.unchecked_transaction().unwrap();
+        let result =
+            crate::wallet::import_standalone_transparent_pubkey(&tx, &network, unknown, pubkey);
+        assert!(matches!(
+            result,
+            Err(crate::error::SqliteClientError::AccountUnknown)
+        ));
+    }
+
+    /// The batch import resolves the account once and imports every pubkey: the returned count is
+    /// the number of distinct receivers inserted, all receivers are present, and re-importing the
+    /// same batch inserts nothing.
+    #[test]
+    #[cfg(feature = "transparent-key-import")]
+    fn import_standalone_transparent_pubkeys_batch() {
+        use proptest::prelude::*;
+        use rusqlite::named_params;
+        use secp256k1::{PublicKey, Secp256k1, SecretKey};
+        use std::collections::HashSet;
+        use transparent::address::TransparentAddress;
+        use zcash_keys::encoding::AddressCodec;
+
+        proptest!(
+            ProptestConfig::with_cases(12),
+            |(sks in proptest::collection::vec(
+                any::<[u8; 32]>()
+                    .prop_filter_map("valid secp256k1 secret key", |b| SecretKey::from_slice(&b).ok()),
+                1..8usize,
+            ))| {
+                let st = TestBuilder::new()
+                    .with_data_store_factory(TestDbFactory::default())
+                    .with_account_from_sapling_activation(BlockHash([0; 32]))
+                    .build();
+
+                let account_uuid = st.test_account().unwrap().id();
+                let network = *st.network();
+                let secp = Secp256k1::new();
+
+                let pubkeys: Vec<PublicKey> =
+                    sks.iter().map(|sk| PublicKey::from_secret_key(&secp, sk)).collect();
+                let distinct: HashSet<String> = pubkeys
+                    .iter()
+                    .map(|pk| TransparentAddress::from_pubkey(pk).encode(&network))
+                    .collect();
+
+                let tx = st.wallet().db().conn.unchecked_transaction().unwrap();
+
+                // Resolves the account once and inserts one row per distinct receiver.
+                let inserted = crate::wallet::import_standalone_transparent_pubkeys(
+                    &tx,
+                    &network,
+                    account_uuid,
+                    &pubkeys,
+                )
+                .unwrap();
+                prop_assert_eq!(inserted, distinct.len());
+
+                // Every receiver is present, exactly once.
+                for addr in &distinct {
+                    let count: i64 = tx
+                        .query_row(
+                            "SELECT COUNT(*) FROM addresses \
+                             WHERE cached_transparent_receiver_address = :a",
+                            named_params! { ":a": addr },
+                            |r| r.get(0),
+                        )
+                        .unwrap();
+                    prop_assert_eq!(count, 1);
+                }
+
+                // Re-importing the same batch inserts nothing.
+                let again = crate::wallet::import_standalone_transparent_pubkeys(
+                    &tx,
+                    &network,
+                    account_uuid,
+                    &pubkeys,
+                )
+                .unwrap();
+                prop_assert_eq!(again, 0);
+            }
+        );
+    }
+
+    /// The batch import resolves the account up front, so a batch targeting an account that does
+    /// not exist returns `AccountUnknown`.
+    #[test]
+    #[cfg(feature = "transparent-key-import")]
+    fn import_standalone_transparent_pubkeys_unknown_account() {
+        use secp256k1::{PublicKey, Secp256k1, SecretKey};
+
+        let st = TestBuilder::new()
+            .with_data_store_factory(TestDbFactory::default())
+            .with_account_from_sapling_activation(BlockHash([0; 32]))
+            .build();
+
+        let network = *st.network();
+        let pubkey = PublicKey::from_secret_key(
+            &Secp256k1::new(),
+            &SecretKey::from_slice(&[0x22; 32]).unwrap(),
+        );
+        let unknown = crate::AccountUuid::from_uuid(uuid::Uuid::from_bytes([0xfe; 16]));
+
+        let tx = st.wallet().db().conn.unchecked_transaction().unwrap();
+        let result =
+            crate::wallet::import_standalone_transparent_pubkeys(&tx, &network, unknown, &[pubkey]);
+        assert!(matches!(
+            result,
+            Err(crate::error::SqliteClientError::AccountUnknown)
+        ));
     }
 
     #[test]

@@ -10,9 +10,36 @@ workspace.
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-07-23
+
+### Added
+- `zcash_protocol::consensus::SECONDS_PER_BLOCK`
+- `zcash_protocol::consensus::BLOCKS_PER_HOUR`
+- `zcash_protocol::constants::MAX_BLOCK_BYTES`, the Zcash consensus maximum
+  block size and therefore the maximum size of any single transaction.
+- `zcash_protocol::value::Zatoshis::{write, read, to_u64_le_bytes}`, a canonical
+  little-endian `u64` binary codec for amounts.
+- `zcash_protocol::testing::arb_txid` (behind the `test-dependencies` feature)
+- `zcash_protocol::consensus::testing::`
+  - `arb_block_height`
+  - `arb_height_for_branch`
+
+### Deprecated
+- `zcash_protocol::consensus::testing::arb_height` has been deprecated; use
+  `arb_height_for_branch` instead.
+
+## [0.10.0] - 2026-07-09
+
+This release sets the NU6.3 mainnet activation height to 3428143.
+
 ### Added
 - `zcash_protocol::consensus::OrchardProtocolRevision`
 - `zcash_protocol::consensus::BranchId::orchard_protocol_revision`
+- `zcash_protocol::consensus::BranchId::network_upgrade`
+- `zcash_protocol::consensus::NetworkUpgrade::branch_id` (previously private)
+
+### Changed
+- MSRV is now 1.88
 
 ## [0.10.0-pre.0] - 2026-06-30
 

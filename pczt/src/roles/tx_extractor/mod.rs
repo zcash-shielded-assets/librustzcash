@@ -88,6 +88,7 @@ impl<'a> TransactionExtractor<'a> {
                 .map_err(Error::Extract)?;
 
         let crate::ParsedPczt { tx_data, .. } = pczt.extract_tx_data::<Unbound, Error>(
+            crate::common::AnchorRequirement::Required,
             |t| {
                 t.extract()
                     .map_err(|e| Error::Transparent(TransparentError::Extract(e)))
@@ -131,17 +132,15 @@ impl<'a> TransactionExtractor<'a> {
                     .transpose()
                 },
                 |o| match o {
-                    Some(OrchardBundle::OrchardVanilla(bundle)) => {
-                        bundle.apply_binding_signature(*shielded_sighash.as_ref(), OsRng)
-                            .ok_or(Error::SighashMismatch)
-                            .map(|b| Some(OrchardBundle::OrchardVanilla(b)))
-                    }
+                    Some(OrchardBundle::OrchardVanilla(bundle)) => bundle
+                        .apply_binding_signature(*shielded_sighash.as_ref(), OsRng)
+                        .ok_or(Error::SighashMismatch)
+                        .map(|b| Some(OrchardBundle::OrchardVanilla(b))),
                     #[cfg(feature = "zsa")]
-                    Some(OrchardBundle::OrchardZSA(bundle)) => {
-                        bundle.apply_binding_signature(*shielded_sighash.as_ref(), OsRng)
-                            .ok_or(Error::SighashMismatch)
-                            .map(|b| Some(OrchardBundle::OrchardZSA(b)))
-                    }
+                    Some(OrchardBundle::OrchardZSA(bundle)) => bundle
+                        .apply_binding_signature(*shielded_sighash.as_ref(), OsRng)
+                        .ok_or(Error::SighashMismatch)
+                        .map(|b| Some(OrchardBundle::OrchardZSA(b))),
                     None => Ok(None),
                 },
                 |_issue| Ok(saved_signed_issue),

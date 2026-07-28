@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 use corez::io::{self, Read, Write};
 use nonempty::NonEmpty;
 use orchard::bundle::{Authorized, BundleVersion, Flags};
-use orchard::primitives::redpallas::{self, SigType, SpendAuth, Binding};
+use orchard::primitives::redpallas::{self, Binding, SigType, SpendAuth};
 use orchard::tree::Anchor;
 use zcash_encoding::{Array, CompactSize, Vector};
 use zcash_protocol::value::ZatBalance;
@@ -12,12 +12,13 @@ use zcash_protocol::value::ZatBalance;
 use crate::encoding::{ReadBytesExt, WriteBytesExt};
 use crate::transaction::Transaction;
 
-fn read_versioned_sig<R: Read, T: SigType>(
-    mut reader: R,
-) -> io::Result<redpallas::Signature<T>> {
+fn read_versioned_sig<R: Read, T: SigType>(mut reader: R) -> io::Result<redpallas::Signature<T>> {
     let sighash_info_bytes = Vector::read(&mut reader, |r| r.read_u8())?;
     if sighash_info_bytes != [0] {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "invalid sighash V0"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "invalid sighash V0",
+        ));
     }
     let mut sig = [0u8; 64];
     reader.read_exact(&mut sig)?;
@@ -36,7 +37,10 @@ fn write_versioned_sig<W: Write, T: SigType>(
 /// Also returns raw 612-byte ZSA enc_ciphertexts per action for decryption.
 pub fn read_v6_bundle_zsa<R: Read>(
     mut reader: R,
-) -> io::Result<(Option<orchard::Bundle<Authorized, ZatBalance>>, Vec<Vec<u8>>)> {
+) -> io::Result<(
+    Option<orchard::Bundle<Authorized, ZatBalance>>,
+    Vec<Vec<u8>>,
+)> {
     let n_action_groups = CompactSize::read(&mut reader)?;
     if n_action_groups == 0 {
         return Ok((None, Vec::new()));
@@ -112,15 +116,20 @@ pub fn read_v6_bundle_zsa<R: Read>(
     let value_balance = Transaction::read_amount(&mut reader)?;
     let binding_sig = read_versioned_sig::<_, Binding>(&mut reader)?;
 
-    let authorization = orchard::bundle::Authorized::from_parts(
-        orchard::Proof::new(proof_bytes),
-        binding_sig,
-    );
+    let authorization =
+        orchard::bundle::Authorized::from_parts(orchard::Proof::new(proof_bytes), binding_sig);
 
-    orchard::Bundle::try_from_parts(actions, flags, value_balance, anchor, authorization, BundleVersion::orchard_insecure_v1())
-        .map(Some)
-        .map(|b| (b, raw_enc_ciphertexts))
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+    orchard::Bundle::try_from_parts(
+        actions,
+        flags,
+        value_balance,
+        anchor,
+        authorization,
+        BundleVersion::orchard_insecure_v1(),
+    )
+    .map(Some)
+    .map(|b| (b, raw_enc_ciphertexts))
+    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
 
 /// Writes an Orchard bundle in the ZSA V6 transaction format.
@@ -146,18 +155,28 @@ pub fn write_v6_bundle_zsa<W: Write>(
                     let raw_enc = raw_enc_ciphertexts.get(i).map(|v| v.as_slice());
                     write_action_zsa(&mut writer, act, raw_enc)?;
                 }
-                let flags_byte = bundle.flags().to_byte(bundle.bundle_version()).ok_or_else(|| {
-                    io::Error::new(io::ErrorKind::InvalidData, "flags not encodable")
-                })?;
+                let flags_byte =
+                    bundle
+                        .flags()
+                        .to_byte(bundle.bundle_version())
+                        .ok_or_else(|| {
+                            io::Error::new(io::ErrorKind::InvalidData, "flags not encodable")
+                        })?;
                 writer.write_u8(flags_byte)?;
                 writer.write_all(&bundle.anchor().to_bytes())?;
                 writer.write_u32_le(0)?; // nAGExpiryHeight
                 CompactSize::write(&mut writer, 0usize)?; // burn
 
-                Vector::write(&mut writer, bundle.authorization().proof().as_ref(), |w, b| w.write_u8(*b))?;
-                Array::write(&mut writer, bundle.actions().iter().map(|a| a.authorization()), |w, auth| {
-                    write_versioned_sig(w, auth)
-                })?;
+                Vector::write(
+                    &mut writer,
+                    bundle.authorization().proof().as_ref(),
+                    |w, b| w.write_u8(*b),
+                )?;
+                Array::write(
+                    &mut writer,
+                    bundle.actions().iter().map(|a| a.authorization()),
+                    |w, auth| write_versioned_sig(w, auth),
+                )?;
                 writer.write_all(&bundle.value_balance().to_i64_le_bytes())?;
                 write_versioned_sig(&mut writer, bundle.authorization().binding_signature())?;
             }
@@ -182,18 +201,28 @@ pub fn write_v6_bundle_zsa<W: Write>(
                         writer.write_all(&nc.out_ciphertext)?;
                     }
                 }
-                let flags_byte = bundle.flags().to_byte(bundle.bundle_version()).ok_or_else(|| {
-                    io::Error::new(io::ErrorKind::InvalidData, "flags not encodable")
-                })?;
+                let flags_byte =
+                    bundle
+                        .flags()
+                        .to_byte(bundle.bundle_version())
+                        .ok_or_else(|| {
+                            io::Error::new(io::ErrorKind::InvalidData, "flags not encodable")
+                        })?;
                 writer.write_u8(flags_byte)?;
                 writer.write_all(&bundle.anchor().to_bytes())?;
                 writer.write_u32_le(0)?; // nAGExpiryHeight
                 CompactSize::write(&mut writer, 0usize)?; // burn
 
-                Vector::write(&mut writer, bundle.authorization().proof().as_ref(), |w, b| w.write_u8(*b))?;
-                Array::write(&mut writer, bundle.actions().iter().map(|a| a.authorization()), |w, auth| {
-                    write_versioned_sig(w, auth)
-                })?;
+                Vector::write(
+                    &mut writer,
+                    bundle.authorization().proof().as_ref(),
+                    |w, b| w.write_u8(*b),
+                )?;
+                Array::write(
+                    &mut writer,
+                    bundle.actions().iter().map(|a| a.authorization()),
+                    |w, auth| write_versioned_sig(w, auth),
+                )?;
                 writer.write_all(&bundle.value_balance().to_i64_le_bytes())?;
                 write_versioned_sig(&mut writer, bundle.authorization().binding_signature())?;
             }
@@ -228,8 +257,8 @@ fn read_action_zsa<R: Read>(mut reader: R) -> io::Result<(orchard::Action<()>, V
 
     // Convert to vanilla TransmittedNoteCiphertext by stripping the 32-byte asset.
     let mut vanilla_enc = NoteBytesData([0u8; 580]);
-    vanilla_enc.0[..52].copy_from_slice(&zsa_enc[..52]);            // compact vanilla
-    vanilla_enc.0[52..].copy_from_slice(&zsa_enc[84..]);            // memo(512) + tag(16)
+    vanilla_enc.0[..52].copy_from_slice(&zsa_enc[..52]); // compact vanilla
+    vanilla_enc.0[52..].copy_from_slice(&zsa_enc[84..]); // memo(512) + tag(16)
 
     let nc = orchard::note::TransmittedNoteCiphertext::<orchard::note_encryption::OrchardDomain> {
         epk_bytes: epk,
@@ -237,9 +266,8 @@ fn read_action_zsa<R: Read>(mut reader: R) -> io::Result<(orchard::Action<()>, V
         out_ciphertext: out,
     };
 
-    let action = orchard::Action::from_parts(nf, rk, cmx, nc, cv, ()).map_err(|_| {
-        io::Error::new(io::ErrorKind::InvalidData, "invalid ZSA action")
-    })?;
+    let action = orchard::Action::from_parts(nf, rk, cmx, nc, cv, ())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid ZSA action"))?;
     Ok((action, raw_enc))
 }
 
@@ -267,7 +295,11 @@ fn write_action_zsa<W: Write>(
         // the encrypted 32-byte asset). This path is used when the raw
         // ciphertext was captured during wire deserialization or will be
         // captured during PCZT extraction.
-        debug_assert_eq!(raw_enc.len(), 612, "ZSA raw enc_ciphertext must be 612 bytes");
+        debug_assert_eq!(
+            raw_enc.len(),
+            612,
+            "ZSA raw enc_ciphertext must be 612 bytes"
+        );
         writer.write_all(&nc.epk_bytes)?;
         writer.write_all(raw_enc)?;
         writer.write_all(&nc.out_ciphertext)?;
@@ -279,8 +311,8 @@ fn write_action_zsa<W: Write>(
         //   ZSA layout:     compact(52) + asset(32)  + memo(512) + tag(16) = 612
         writer.write_all(&nc.epk_bytes)?;
         writer.write_all(&nc.enc_ciphertext.as_ref()[..52])?; // compact vanilla (52)
-        writer.write_all(&[0u8; 32])?;                         // ZSA asset placeholder (32)
-        writer.write_all(&nc.enc_ciphertext.as_ref()[52..])?;  // memo(512) + tag(16)
+        writer.write_all(&[0u8; 32])?; // ZSA asset placeholder (32)
+        writer.write_all(&nc.enc_ciphertext.as_ref()[52..])?; // memo(512) + tag(16)
         writer.write_all(&nc.out_ciphertext)?;
     }
     Ok(())
