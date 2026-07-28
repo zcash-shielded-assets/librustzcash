@@ -2,6 +2,7 @@ use alloc::vec::Vec;
 use corez::io::{self, Read, Write};
 use ff::PrimeField;
 
+#[cfg(feature = "zsa")]
 use crate::encoding::{ReadBytesExt, WriteBytesExt};
 use ::sapling::{
     Nullifier,
@@ -162,8 +163,10 @@ fn read_spend_auth_sig<R: Read>(mut reader: R) -> io::Result<redjubjub::Signatur
 // ── V6 versioned signature support ─────────────────────────────────────────
 
 /// Sighash info V0 for sapling spend authorization signatures in V6 transactions.
+#[cfg(feature = "zsa")]
 pub(crate) const SAPLING_SIGHASH_INFO_V0: [u8; 1] = [0];
 
+#[cfg(feature = "zsa")]
 fn read_versioned_signature<R: Read, T: redjubjub::SigType>(
     mut reader: R,
 ) -> io::Result<redjubjub::Signature<T>> {
@@ -179,6 +182,7 @@ fn read_versioned_signature<R: Read, T: redjubjub::SigType>(
     Ok(redjubjub::Signature::from(signature_bytes))
 }
 
+#[cfg(feature = "zsa")]
 fn write_versioned_signature<W: Write, T: redjubjub::SigType>(
     mut writer: W,
     sig: &redjubjub::Signature<T>,
@@ -530,6 +534,7 @@ pub(crate) fn write_v5_bundle<W: Write>(
 ///
 /// V6 differs from V5 only in spend authorization and binding signatures,
 /// which are prefixed with versioned sighash info (`[0x01, 0x00]`).
+#[cfg(feature = "zsa")]
 pub(crate) fn read_v6_bundle<R: Read>(
     mut reader: R,
 ) -> io::Result<Option<Bundle<Authorized, ZatBalance>>> {
@@ -591,6 +596,7 @@ pub(crate) fn read_v6_bundle<R: Read>(
 ///
 /// V6 differs from V5 only in spend authorization and binding signatures,
 /// which are prefixed with versioned sighash info (`[0x01, 0x00]`).
+#[cfg(feature = "zsa")]
 pub(crate) fn write_v6_bundle<W: Write>(
     mut writer: W,
     sapling_bundle: Option<&Bundle<Authorized, ZatBalance>>,

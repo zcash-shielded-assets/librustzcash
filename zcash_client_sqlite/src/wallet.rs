@@ -2986,7 +2986,10 @@ fn parse_tx<P: consensus::Parameters>(
                 tx_data.transparent_bundle().cloned(),
                 tx_data.sprout_bundle().cloned(),
                 tx_data.sapling_bundle().cloned(),
-                tx_data.orchard_bundle().cloned(),
+                tx_data
+                    .orchard_bundle()
+                    .and_then(|bundle| bundle.as_vanilla())
+                    .cloned(),
             )
             .freeze()
             .map(|t| (expiry_height, t))
@@ -3509,8 +3512,8 @@ pub(crate) fn store_transaction_to_be_sent<P: consensus::Parameters>(
         #[cfg(feature = "orchard")]
         {
             detectable_via_scanning = true;
-            for action in _bundle.actions() {
-                orchard::mark_orchard_note_spent(conn, tx_ref, action.nullifier())?;
+            for nullifier in _bundle.nullifiers() {
+                orchard::mark_orchard_note_spent(conn, tx_ref, nullifier)?;
             }
         }
 

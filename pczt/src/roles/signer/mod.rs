@@ -681,7 +681,7 @@ mod tests {
 
         assert!(pczt.ironwood.anchor.is_none());
 
-        let pczt = IoFinalizer::new(pczt).finalize_io().unwrap();
+        let (pczt, _) = IoFinalizer::new(pczt).finalize_io().unwrap();
         assert!(pczt.ironwood.anchor.is_none());
         assert!(pczt.ironwood.bsk.is_some());
         // The IO Finalizer signs and clears the dummy spending key.

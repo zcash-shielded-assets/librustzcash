@@ -75,6 +75,65 @@ impl<A: orchard::bundle::Authorization> OrchardBundle<A> {
         }
     }
 
+    /// Returns the ZSA inner bundle, or `None` for a standard Orchard bundle.
+    #[cfg(feature = "zsa")]
+    pub fn as_zsa(
+        &self,
+    ) -> Option<&orchard::Bundle<A, ZatBalance, orchard::zsa::OrchardZSADomain>> {
+        match self {
+            Self::OrchardVanilla(_) => None,
+            Self::OrchardZSA(bundle) => Some(bundle),
+        }
+    }
+
+    /// Returns the number of actions in this bundle.
+    pub fn action_count(&self) -> usize {
+        match self {
+            Self::OrchardVanilla(bundle) => bundle.actions().len(),
+            #[cfg(feature = "zsa")]
+            Self::OrchardZSA(bundle) => bundle.actions().len(),
+        }
+    }
+
+    /// Returns the nullifiers revealed by this bundle's actions.
+    pub fn nullifiers(&self) -> alloc::vec::IntoIter<&orchard::note::Nullifier> {
+        match self {
+            Self::OrchardVanilla(bundle) => bundle
+                .actions()
+                .iter()
+                .map(|a| a.nullifier())
+                .collect::<alloc::vec::Vec<_>>(),
+            #[cfg(feature = "zsa")]
+            Self::OrchardZSA(bundle) => bundle
+                .actions()
+                .iter()
+                .map(|a| a.nullifier())
+                .collect::<alloc::vec::Vec<_>>(),
+        }
+        .into_iter()
+    }
+
+    /// Trial-decrypts one output with an Orchard incoming viewing key.
+    pub fn decrypt_output_with_key(
+        &self,
+        action_idx: usize,
+        key: &orchard::keys::IncomingViewingKey,
+    ) -> Option<(orchard::Note, orchard::Address, [u8; 512])> {
+        match self {
+            Self::OrchardVanilla(bundle) => bundle.decrypt_output_with_key(action_idx, key),
+            #[cfg(feature = "zsa")]
+            Self::OrchardZSA(bundle) => {
+                use zcash_note_encryption::try_note_decryption;
+
+                let prepared_ivk = orchard::keys::PreparedIncomingViewingKey::new(key);
+                bundle.actions().get(action_idx).and_then(|action| {
+                    let domain = orchard::zsa::OrchardZSADomain::for_action(action);
+                    try_note_decryption(&domain, &prepared_ivk, action)
+                })
+            }
+        }
+    }
+
     pub fn value_balance(&self) -> &ZatBalance {
         match self {
             Self::OrchardVanilla(b) => b.value_balance(),
@@ -412,6 +471,7 @@ pub struct Transaction {
     data: TransactionData<Authorized>,
     /// Raw 612-byte ZSA enc_ciphertexts per orchard action, populated for
     /// Nu7 transactions. Empty for non-ZSA transactions.
+    #[cfg(feature = "zsa")]
     pub zsa_action_enc_ciphertexts: alloc::vec::Vec<alloc::vec::Vec<u8>>,
 }
 
@@ -629,9 +689,6 @@ impl<A: Authorization> TransactionData<A> {
         self.ironwood_bundle.as_ref()
     }
 
-    /// Returns the ZSA bundle if present.
-    #[cfg(feature = "zsa")]
-
     /// Returns the issuance bundle if present.
     #[cfg(feature = "zsa")]
     pub fn issue_bundle(&self) -> Option<&IssueBundle<A::IssueAuth>> {
@@ -696,8 +753,6 @@ impl<A: Authorization> TransactionData<A> {
     pub fn digest<D: TransactionDigest<A>>(&self, digester: D) -> D::Digest {
         #[cfg(feature = "zsa")]
         let issue_digest = digester.digest_issue(self.issue_bundle.as_ref());
-        #[cfg(not(feature = "zsa"))]
-        let issue_digest = ();
 
         digester.combine(
             digester.digest_header(
@@ -712,6 +767,7 @@ impl<A: Authorization> TransactionData<A> {
             digester.digest_sapling(self.version, self.sapling_bundle.as_ref()),
             digester.digest_orchard(self.version, self.orchard_bundle.as_ref()),
             digester.digest_ironwood(self.ironwood_bundle.as_ref()),
+            #[cfg(feature = "zsa")]
             issue_digest,
         )
     }
@@ -971,6 +1027,7 @@ impl Transaction {
         Transaction {
             txid,
             data,
+            #[cfg(feature = "zsa")]
             zsa_action_enc_ciphertexts: alloc::vec::Vec::new(),
         }
     }
@@ -985,6 +1042,7 @@ impl Transaction {
         Transaction {
             txid,
             data,
+            #[cfg(feature = "zsa")]
             zsa_action_enc_ciphertexts: alloc::vec::Vec::new(),
         }
     }
@@ -1278,11 +1336,7 @@ impl Transaction {
             lock_time,
             expiry_height,
             #[cfg(feature = "zip-233")]
-            zip233_amount: if consensus_branch_id == BranchId::Nu7 {
-                Self::read_zip233_amount(&mut reader)?
-            } else {
-                Zatoshis::ZERO
-            },
+            zip233_amount: Self::read_zip233_amount(&mut reader)?,
         })
     }
 
@@ -1467,9 +1521,7 @@ impl Transaction {
         writer.write_u32_le(u32::from(self.expiry_height))?;
 
         #[cfg(feature = "zip-233")]
-        if self.consensus_branch_id == BranchId::Nu7 {
-            writer.write_u64_le(self.zip233_amount.into())?;
-        }
+        writer.write_u64_le(self.zip233_amount.into())?;
         Ok(())
     }
 
@@ -1511,6 +1563,7 @@ pub struct TxDigests<A> {
     /// using the Ironwood bundle personalization.
     pub ironwood_digest: Option<A>,
     /// The digest of the ZSA issue bundle (Nu7 V6 transactions).
+    #[cfg(feature = "zsa")]
     pub issue_digest: Option<A>,
 }
 
@@ -1522,7 +1575,7 @@ pub trait TransactionDigest<A: Authorization> {
     /// The digest type produced for the Ironwood bundle in version 6 transactions.
     type IronwoodDigest;
     /// The digest type produced for the ZSA issue bundle in Nu7 transactions.
-    /// When the `zsa` feature is not enabled, this is `()`.
+    #[cfg(feature = "zsa")]
     type IssueDigest;
 
     type Digest;
@@ -1581,7 +1634,7 @@ pub trait TransactionDigest<A: Authorization> {
         sapling_digest: Self::SaplingDigest,
         orchard_digest: Self::OrchardDigest,
         ironwood_digest: Self::IronwoodDigest,
-        issue_digest: Self::IssueDigest,
+        #[cfg(feature = "zsa")] issue_digest: Self::IssueDigest,
     ) -> Self::Digest;
 }
 

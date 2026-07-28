@@ -28,7 +28,7 @@ pub(crate) fn issue_sighash_kind_from_info(bytes: &[u8]) -> Option<IssueSighashK
     }
 }
 
-#[cfg(all(test))]
+#[cfg(test)]
 mod tests {
     use super::*;
 

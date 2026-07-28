@@ -104,7 +104,7 @@ impl TxMeta for Transaction {
     fn orchard_spent_note_nullifiers(&self) -> impl Iterator<Item = &::orchard::note::Nullifier> {
         self.orchard_bundle()
             .into_iter()
-            .flat_map(|bundle| bundle.actions().iter().map(|action| action.nullifier()))
+            .flat_map(|bundle| bundle.nullifiers())
     }
 
     #[cfg(feature = "orchard")]

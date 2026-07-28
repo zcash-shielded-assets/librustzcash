@@ -190,6 +190,9 @@ where
         .orchard
         .as_ref()
         .ok_or_else(|| BuildError::Build("preparation: no orchard bundle was built".into()))?;
+    let bundle = bundle.as_vanilla().ok_or_else(|| {
+        BuildError::Build("preparation: ZSA Orchard bundles are unsupported".into())
+    })?;
     let note_version = bundle.bundle_version().note_version();
     let placed: Vec<PlacedPrepOutput> = outputs
         .iter()
@@ -215,6 +218,7 @@ where
             let note = orchard::note::Note::from_parts(
                 recipient,
                 orchard::value::NoteValue::from_raw(u64::from(out.value())),
+                orchard::note::AssetBase::zatoshi(),
                 rho,
                 rseed,
                 note_version,

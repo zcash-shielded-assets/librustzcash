@@ -35,6 +35,7 @@ fn write_versioned_sig<W: Write, T: SigType>(
 
 /// Reads an Orchard bundle from the ZSA V6 transaction format.
 /// Also returns raw 612-byte ZSA enc_ciphertexts per action for decryption.
+#[allow(clippy::type_complexity)]
 pub fn read_v6_bundle_zsa<R: Read>(
     mut reader: R,
 ) -> io::Result<(

@@ -35,15 +35,13 @@ use zcash_protocol::value::Zatoshis;
 #[cfg(any(feature = "io-finalizer", feature = "signer", feature = "tx-extractor"))]
 use {
     common::{Global, determine_lock_time},
-    zcash_primitives::transaction::{Authorization, TransactionData, TxVersion},
+    zcash_primitives::transaction::{Authorization, OrchardBundle, TransactionData, TxVersion},
     zcash_protocol::{
         consensus::BranchId,
         constants::{V5_TX_VERSION, V5_VERSION_GROUP_ID},
     },
 };
 
-#[cfg(feature = "tx-extractor")]
-use zcash_primitives::transaction::OrchardBundle;
 #[cfg(any(feature = "io-finalizer", feature = "signer"))]
 use zcash_primitives::transaction::sighash_v6::v6_signature_hash;
 #[cfg(all(feature = "zsa", any(feature = "io-finalizer", feature = "signer")))]
@@ -552,6 +550,7 @@ impl Pczt {
     /// lock time computation, and final assembly, delegating bundle extraction to the
     /// caller via closures that receive references to the parsed bundles.
     #[cfg(any(feature = "io-finalizer", feature = "signer", feature = "tx-extractor"))]
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn extract_tx_data<A, E>(
         self,
         anchor_requirement: common::AnchorRequirement,
@@ -738,6 +737,8 @@ impl Pczt {
                     OrchardBundle::OrchardVanilla(b) => b,
                     #[cfg(feature = "zsa")]
                     OrchardBundle::OrchardZSA(_) => panic!("ZSA in non-Nu7 V6"),
+                    #[cfg(not(feature = "zsa"))]
+                    _ => panic!("ZSA bundle requires the `zsa` feature"),
                 }),
                 ironwood_bundle,
             ),
@@ -755,6 +756,8 @@ impl Pczt {
                     OrchardBundle::OrchardVanilla(b) => b,
                     #[cfg(feature = "zsa")]
                     OrchardBundle::OrchardZSA(_) => panic!("ZSA in pre-V6 tx"),
+                    #[cfg(not(feature = "zsa"))]
+                    _ => panic!("ZSA bundle requires the `zsa` feature"),
                 }),
             ),
         };

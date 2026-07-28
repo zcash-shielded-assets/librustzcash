@@ -318,8 +318,8 @@ mod tests {
                 nu6_1: None,
                 nu6_2: None,
                 nu6_3: Some(activation),
-                #[cfg(zcash_unstable = "nu7")]
                 nu7: None,
+                orchard_mode: zcash_protocol::consensus::OrchardMode::Normal,
             },
         }
         .up(&tx)

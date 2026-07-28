@@ -25,5 +25,6 @@ extern crate alloc;
 pub mod block;
 pub(crate) mod encoding;
 pub mod merkle_tree;
+#[cfg(feature = "zsa")]
 pub(crate) mod sighash_versioning;
 pub mod transaction;

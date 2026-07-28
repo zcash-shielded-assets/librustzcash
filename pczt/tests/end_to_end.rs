@@ -167,7 +167,6 @@ fn transparent_to_orchard() {
             Some(orchard_ovk),
             recipient,
             Zatoshis::const_from_u64(100_000),
-            #[cfg(feature = "zsa")]
             orchard::note::AssetBase::zatoshi(),
             MemoBytes::empty(),
         )
@@ -177,18 +176,12 @@ fn transparent_to_orchard() {
             Some(orchard_fvk.to_ovk(zip32::Scope::Internal)),
             orchard_fvk.address_at(0u32, orchard::keys::Scope::Internal),
             Zatoshis::const_from_u64(885_000),
-            #[cfg(feature = "zsa")]
             orchard::note::AssetBase::zatoshi(),
             MemoBytes::empty(),
         )
         .unwrap();
     let PcztResult { pczt_parts, .. } = builder
-        .build_for_pczt(
-            rng,
-            &zip317::FeeRule::standard(),
-            #[cfg(feature = "zsa")]
-            |_| false,
-        )
+        .build_for_pczt(rng, &zip317::FeeRule::standard(), |_| false)
         .unwrap();
 
     // Create the base PCZT.
@@ -211,7 +204,7 @@ fn transparent_to_orchard() {
         )
     }));
 
-    let memo_resolved = IoFinalizer::new(memo_redacted).finalize_io().unwrap();
+    let memo_resolved = IoFinalizer::new(memo_redacted).finalize_io().unwrap().0;
     assert!(memo_resolved.orchard().actions().iter().all(|action| {
         matches!(
             action.output().enc_ciphertext(),
@@ -221,7 +214,7 @@ fn transparent_to_orchard() {
     check_round_trip(&memo_resolved);
 
     // Finalize the I/O.
-    let pczt = IoFinalizer::new(pczt).finalize_io().unwrap();
+    let pczt = IoFinalizer::new(pczt).finalize_io().unwrap().0;
     check_round_trip(&pczt);
 
     // Create proofs.
@@ -368,7 +361,6 @@ fn transparent_p2sh_multisig_to_orchard() {
             Some(orchard_ovk),
             recipient,
             Zatoshis::const_from_u64(100_000),
-            #[cfg(feature = "zsa")]
             orchard::note::AssetBase::zatoshi(),
             MemoBytes::empty(),
         )
@@ -378,18 +370,12 @@ fn transparent_p2sh_multisig_to_orchard() {
             Some(orchard_fvk.to_ovk(zip32::Scope::Internal)),
             orchard_fvk.address_at(0u32, orchard::keys::Scope::Internal),
             Zatoshis::const_from_u64(880_000),
-            #[cfg(feature = "zsa")]
             orchard::note::AssetBase::zatoshi(),
             MemoBytes::empty(),
         )
         .unwrap();
     let PcztResult { pczt_parts, .. } = builder
-        .build_for_pczt(
-            rng,
-            &zip317::FeeRule::standard(),
-            #[cfg(feature = "zsa")]
-            |_| false,
-        )
+        .build_for_pczt(rng, &zip317::FeeRule::standard(), |_| false)
         .unwrap();
 
     // Create the base PCZT.
@@ -397,7 +383,7 @@ fn transparent_p2sh_multisig_to_orchard() {
     check_round_trip(&pczt);
 
     // Finalize the I/O.
-    let pczt = IoFinalizer::new(pczt).finalize_io().unwrap();
+    let pczt = IoFinalizer::new(pczt).finalize_io().unwrap().0;
     check_round_trip(&pczt);
 
     // Create proofs.
@@ -588,7 +574,6 @@ fn sapling_to_orchard() {
             Some(sapling_dfvk.to_ovk(zip32::Scope::External).0.into()),
             recipient,
             Zatoshis::const_from_u64(100_000),
-            #[cfg(feature = "zsa")]
             orchard::note::AssetBase::zatoshi(),
             MemoBytes::empty(),
         )
@@ -606,12 +591,7 @@ fn sapling_to_orchard() {
         sapling_meta,
         ..
     } = builder
-        .build_for_pczt(
-            OsRng,
-            &zip317::FeeRule::standard(),
-            #[cfg(feature = "zsa")]
-            |_| false,
-        )
+        .build_for_pczt(OsRng, &zip317::FeeRule::standard(), |_| false)
         .unwrap();
 
     // Create the base PCZT.
@@ -619,7 +599,7 @@ fn sapling_to_orchard() {
     check_round_trip(&pczt);
 
     // Finalize the I/O.
-    let pczt = IoFinalizer::new(pczt).finalize_io().unwrap();
+    let pczt = IoFinalizer::new(pczt).finalize_io().unwrap().0;
     check_round_trip(&pczt);
 
     // Update the Sapling bundle with its proof generation key.
@@ -710,13 +690,7 @@ fn orchard_to_orchard() {
         )
         .unwrap();
         orchard_builder
-            .add_output(
-                None,
-                recipient,
-                value,
-                orchard::note::AssetBase::zatoshi(),
-                Memo::Empty.encode().into_bytes(),
-            )
+            .add_output(None, recipient, value, Memo::Empty.encode().into_bytes())
             .unwrap();
         let (bundle, meta) = orchard_builder.build::<i64>(&mut rng).unwrap().unwrap();
         let action = bundle
@@ -766,7 +740,6 @@ fn orchard_to_orchard() {
             Some(orchard_ovk),
             recipient,
             Zatoshis::const_from_u64(100_000),
-            #[cfg(feature = "zsa")]
             orchard::note::AssetBase::zatoshi(),
             MemoBytes::empty(),
         )
@@ -776,7 +749,6 @@ fn orchard_to_orchard() {
             Some(orchard_fvk.to_ovk(zip32::Scope::Internal)),
             orchard_fvk.address_at(0u32, orchard::keys::Scope::Internal),
             Zatoshis::const_from_u64(890_000),
-            #[cfg(feature = "zsa")]
             orchard::note::AssetBase::zatoshi(),
             MemoBytes::empty(),
         )
@@ -786,12 +758,7 @@ fn orchard_to_orchard() {
         orchard_meta,
         ..
     } = builder
-        .build_for_pczt(
-            OsRng,
-            &zip317::FeeRule::standard(),
-            #[cfg(feature = "zsa")]
-            |_| false,
-        )
+        .build_for_pczt(OsRng, &zip317::FeeRule::standard(), |_| false)
         .unwrap();
 
     // Create the base PCZT.
@@ -799,7 +766,7 @@ fn orchard_to_orchard() {
     check_round_trip(&pczt);
 
     // Finalize the I/O.
-    let pczt = IoFinalizer::new(pczt).finalize_io().unwrap();
+    let pczt = IoFinalizer::new(pczt).finalize_io().unwrap().0;
     check_round_trip(&pczt);
 
     // Create proofs.
@@ -997,6 +964,7 @@ fn orchard_low_level_signer_uses_preverified_signing_parse() {
             Some(orchard_ovk),
             recipient,
             Zatoshis::const_from_u64(100_000),
+            orchard::note::AssetBase::zatoshi(),
             MemoBytes::empty(),
         )
         .unwrap();
@@ -1005,6 +973,7 @@ fn orchard_low_level_signer_uses_preverified_signing_parse() {
             Some(orchard_fvk.to_ovk(zip32::Scope::Internal)),
             orchard_fvk.address_at(0u32, orchard::keys::Scope::Internal),
             Zatoshis::const_from_u64(890_000),
+            orchard::note::AssetBase::zatoshi(),
             MemoBytes::empty(),
         )
         .unwrap();
@@ -1013,12 +982,12 @@ fn orchard_low_level_signer_uses_preverified_signing_parse() {
         orchard_meta,
         ..
     } = builder
-        .build_for_pczt(OsRng, &zip317::FeeRule::standard())
+        .build_for_pczt(OsRng, &zip317::FeeRule::standard(), |_| false)
         .unwrap();
 
     // Create the base PCZT, and finalize the I/O.
     let pczt = Creator::build_from_parts(pczt_parts).unwrap();
-    let pczt = IoFinalizer::new(pczt).finalize_io().unwrap();
+    let pczt = IoFinalizer::new(pczt).finalize_io().unwrap().0;
 
     // Create the proof before signing, so that the byte-losslessness check below
     // covers a maximal bundle (witnesses, proof, and FVKs all present).
@@ -1191,12 +1160,13 @@ fn pczt_with_anchor(pool: ShieldedPool) -> Pczt {
         .unwrap();
 
     let PcztResult { pczt_parts, .. } = builder
-        .build_for_pczt(OsRng, &zip317::FeeRule::standard())
+        .build_for_pczt(OsRng, &zip317::FeeRule::standard(), |_| false)
         .unwrap();
 
     IoFinalizer::new(Creator::build_from_parts(pczt_parts).unwrap())
         .finalize_io()
         .unwrap()
+        .0
 }
 
 fn redact_anchor(pczt: Pczt, pool: ShieldedPool) -> Pczt {
@@ -1332,12 +1302,13 @@ fn redacted_sapling_anchor_can_be_restored_after_signing() {
         sapling_meta,
         ..
     } = builder
-        .build_for_pczt(OsRng, &zip317::FeeRule::standard())
+        .build_for_pczt(OsRng, &zip317::FeeRule::standard(), |_| false)
         .unwrap();
 
     let pczt = IoFinalizer::new(Creator::build_from_parts(pczt_parts).unwrap())
         .finalize_io()
-        .unwrap();
+        .unwrap()
+        .0;
     let index = sapling_meta.spend_index(0).unwrap();
     let pczt = Updater::new(pczt)
         .update_sapling_with(|mut updater| {
@@ -1493,12 +1464,13 @@ fn wallet_can_set_sapling_witness_after_signing() {
         sapling_meta,
         ..
     } = builder
-        .build_for_pczt(OsRng, &zip317::FeeRule::standard())
+        .build_for_pczt(OsRng, &zip317::FeeRule::standard(), |_| false)
         .unwrap();
 
     let pczt = IoFinalizer::new(Creator::build_from_parts(pczt_parts).unwrap())
         .finalize_io()
-        .unwrap();
+        .unwrap()
+        .0;
     let index = sapling_meta.spend_index(0).unwrap();
     let pczt = Updater::new(pczt)
         .update_sapling_with(|mut updater| {
@@ -1580,8 +1552,8 @@ fn pre_nu6_3_test_network() -> zcash_protocol::local_consensus::LocalNetwork {
         nu6_1: Some(BlockHeight::from_u32(8)),
         nu6_2: Some(BlockHeight::from_u32(9)),
         nu6_3: None,
-        #[cfg(zcash_unstable = "nu7")]
         nu7: None,
+        orchard_mode: zcash_protocol::consensus::OrchardMode::Normal,
     }
 }
 
@@ -1600,8 +1572,8 @@ fn nu6_3_test_network() -> zcash_protocol::local_consensus::LocalNetwork {
         nu6_1: Some(BlockHeight::from_u32(8)),
         nu6_2: Some(BlockHeight::from_u32(9)),
         nu6_3: Some(BlockHeight::from_u32(10)),
-        #[cfg(zcash_unstable = "nu7")]
         nu7: None,
+        orchard_mode: zcash_protocol::consensus::OrchardMode::Normal,
     }
 }
 
@@ -1692,12 +1664,13 @@ fn redacted_orchard_anchor_can_be_restored_after_signing() {
         orchard_meta,
         ..
     } = builder
-        .build_for_pczt(OsRng, &zip317::FeeRule::standard())
+        .build_for_pczt(OsRng, &zip317::FeeRule::standard(), |_| false)
         .unwrap();
 
     let pczt = IoFinalizer::new(Creator::build_from_parts(pczt_parts).unwrap())
         .finalize_io()
-        .unwrap();
+        .unwrap()
+        .0;
     let index = orchard_meta.spend_action_index(0).unwrap();
     check_v2_round_trip(&pczt);
 
@@ -1836,6 +1809,7 @@ fn wallet_can_set_orchard_witness_after_signing() {
             Some(orchard_ovk),
             recipient,
             Zatoshis::const_from_u64(990_000),
+            orchard::note::AssetBase::zatoshi(),
             MemoBytes::empty(),
         )
         .unwrap();
@@ -1844,12 +1818,13 @@ fn wallet_can_set_orchard_witness_after_signing() {
         orchard_meta,
         ..
     } = builder
-        .build_for_pczt(OsRng, &zip317::FeeRule::standard())
+        .build_for_pczt(OsRng, &zip317::FeeRule::standard(), |_| false)
         .unwrap();
 
     let pczt = IoFinalizer::new(Creator::build_from_parts(pczt_parts).unwrap())
         .finalize_io()
-        .unwrap();
+        .unwrap()
+        .0;
     let index = orchard_meta.spend_action_index(0).unwrap();
     check_round_trip(&pczt);
 
@@ -2017,12 +1992,13 @@ fn wallet_can_set_ironwood_witness_after_signing() {
         ironwood_meta,
         ..
     } = builder
-        .build_for_pczt(OsRng, &zip317::FeeRule::standard())
+        .build_for_pczt(OsRng, &zip317::FeeRule::standard(), |_| false)
         .unwrap();
 
     let pczt = IoFinalizer::new(Creator::build_from_parts(pczt_parts).unwrap())
         .finalize_io()
-        .unwrap();
+        .unwrap()
+        .0;
     let index = ironwood_meta.spend_action_index(0).unwrap();
     check_v2_round_trip(&pczt);
 
@@ -2191,13 +2167,13 @@ fn ironwood_low_level_signer_uses_preverified_signing_parse() {
         ironwood_meta,
         ..
     } = builder
-        .build_for_pczt(OsRng, &zip317::FeeRule::standard())
+        .build_for_pczt(OsRng, &zip317::FeeRule::standard(), |_| false)
         .unwrap();
 
     // Create the base PCZT, and finalize the I/O.
     let pczt = Creator::build_from_parts(pczt_parts).unwrap();
     check_v2_round_trip(&pczt);
-    let pczt = IoFinalizer::new(pczt).finalize_io().unwrap();
+    let pczt = IoFinalizer::new(pczt).finalize_io().unwrap().0;
     check_v2_round_trip(&pczt);
 
     // A no-op signing pass must be byte-lossless: the preverified parse drops the
@@ -2283,7 +2259,10 @@ fn ironwood_low_level_signer_uses_preverified_signing_parse() {
             original.output().enc_ciphertext()
         );
     }
-    let finalized = IoFinalizer::new(transported.clone()).finalize_io().unwrap();
+    let finalized = IoFinalizer::new(transported.clone())
+        .finalize_io()
+        .unwrap()
+        .0;
     assert!(finalized.ironwood().anchor().is_none());
     assert!(
         Prover::new(transported.clone())
@@ -2495,7 +2474,7 @@ fn builder_can_defer_anchors_until_proving() {
     check_v2_round_trip(&pczt);
 
     // I/O finalization and signing need neither anchors nor witnesses under V6.
-    let pczt = IoFinalizer::new(pczt).finalize_io().unwrap();
+    let pczt = IoFinalizer::new(pczt).finalize_io().unwrap().0;
     let mut signer = Signer::new(pczt).unwrap();
     let sighash = signer.shielded_sighash();
     signer.sign_orchard(index, &orchard_ask).unwrap();

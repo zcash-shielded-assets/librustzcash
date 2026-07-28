@@ -322,8 +322,10 @@ mod tests {
 
     #[test]
     fn merge_concatenates_intents() {
-        let mut a = Bundle::default();
-        a.ik = [0x01; 32];
+        let mut a = Bundle {
+            ik: [0x01; 32],
+            ..Bundle::default()
+        };
         a.intents.push(IssueIntent {
             asset_desc_hash: [0x11; 32],
             recipient: [0x41; 43],
@@ -332,8 +334,10 @@ mod tests {
             finalize: false,
         });
 
-        let mut b = Bundle::default();
-        b.ik = [0x01; 32];
+        let mut b = Bundle {
+            ik: [0x01; 32],
+            ..Bundle::default()
+        };
         b.intents.push(IssueIntent {
             asset_desc_hash: [0x22; 32],
             recipient: [0x42; 43],
@@ -349,8 +353,10 @@ mod tests {
 
     #[test]
     fn intent_serialization_roundtrip() {
-        let mut bundle = Bundle::default();
-        bundle.ik = [0xAB; 32];
+        let mut bundle = Bundle {
+            ik: [0xAB; 32],
+            ..Bundle::default()
+        };
         bundle.intents.push(IssueIntent {
             asset_desc_hash: [0xCC; 32],
             recipient: [0x42; 43],

@@ -471,6 +471,8 @@ fn recover_memo_plaintext_from_ciphertext_and_action(
         ),
         #[cfg(feature = "zsa")]
         NoteVersion::V3ZSA => None,
+        #[cfg(not(feature = "zsa"))]
+        _ => None,
     }
 }
 
@@ -2268,10 +2270,12 @@ impl Bundle {
                     orchard::pczt::Zip32Derivation::parse(z.seed_fingerprint, z.derivation_path)
                 })
                 .transpose()?;
-            // The ZSA Orchard fork does not expose the upstream fast preverified
-            // parser, so retain full FVK validation on this path.
-            let _ = preverified;
-            let spend = orchard::pczt::Spend::parse(
+            let parse_spend = if preverified {
+                orchard::pczt::Spend::parse_preverified_for_signing
+            } else {
+                orchard::pczt::Spend::parse
+            };
+            let spend = parse_spend(
                 action.spend.nullifier,
                 action.spend.rk,
                 action.spend.spend_auth_sig,

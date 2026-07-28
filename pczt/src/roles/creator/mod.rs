@@ -338,6 +338,8 @@ impl Creator {
                     zcash_primitives::transaction::builder::OrchardPcztBundle::Zsa(bundle) => {
                         OrchardBundle::serialize_from(bundle)
                     }
+                    #[cfg(not(feature = "zsa"))]
+                    _ => unreachable!("ZSA PCZT bundle requires the `zsa` feature"),
                 })
                 .unwrap_or(crate::orchard::EMPTY_ORCHARD),
             ironwood: parts
@@ -345,7 +347,9 @@ impl Creator {
                 .map(OrchardBundle::serialize_from)
                 .unwrap_or(crate::orchard::EMPTY_IRONWOOD),
             issue: {
-                let mut issue = crate::issue::Bundle::default();
+                let issue = crate::issue::Bundle::default();
+                #[cfg(feature = "zsa")]
+                let mut issue = issue;
                 #[cfg(feature = "zsa")]
                 if let Some(zsa) = parts.issuance_builder {
                     issue.ik = zsa.issuance_key().to_bytes();

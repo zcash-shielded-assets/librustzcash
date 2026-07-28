@@ -941,8 +941,7 @@ where
         d_tx.tx()
             .orchard_bundle()
             .iter()
-            .flat_map(|b| b.actions().iter())
-            .map(|action| action.nullifier()),
+            .flat_map(|b| b.nullifiers()),
         #[cfg(feature = "orchard")]
         d_tx.tx()
             .ironwood_bundle()

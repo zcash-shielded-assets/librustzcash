@@ -30,6 +30,9 @@ use crate::{
 #[cfg(feature = "orchard")]
 use orchard::{note_encryption::OrchardDomain, primitives::redpallas, tree::MerkleHashOrchard};
 
+#[cfg(all(feature = "orchard", feature = "zsa"))]
+use orchard::zsa::OrchardZSADomain;
+
 #[cfg(feature = "orchard")]
 use super::IronwoodDomain;
 
@@ -72,6 +75,22 @@ type TaggedOrchardBatchRunner<IvkTag, Tasks> = BatchRunner<
     Tasks,
 >;
 
+#[cfg(all(feature = "orchard", feature = "zsa"))]
+type TaggedZsaBatch<IvkTag> = Batch<
+    IvkTag,
+    OrchardZSADomain,
+    orchard::Action<redpallas::Signature<redpallas::SpendAuth>, OrchardZSADomain>,
+    FullDecryptor,
+>;
+#[cfg(all(feature = "orchard", feature = "zsa"))]
+type TaggedZsaBatchRunner<IvkTag, Tasks> = BatchRunner<
+    IvkTag,
+    OrchardZSADomain,
+    orchard::Action<redpallas::Signature<redpallas::SpendAuth>, OrchardZSADomain>,
+    FullDecryptor,
+    Tasks,
+>;
+
 // Ironwood outputs are decrypted under the Ironwood note-encryption domain, which is distinct from
 // the Orchard domain (it accepts version 3 note plaintexts), so an Ironwood batch is a distinct
 // type from an Orchard batch and requires its own task type.
@@ -99,10 +118,21 @@ pub(crate) trait OrchardTasks<IvkTag> {}
 #[cfg(not(feature = "orchard"))]
 impl<IvkTag, T> OrchardTasks<IvkTag> for T {}
 
-#[cfg(feature = "orchard")]
+#[cfg(all(feature = "orchard", not(feature = "zsa")))]
 pub(crate) trait OrchardTasks<IvkTag>: Tasks<TaggedOrchardBatch<IvkTag>> {}
-#[cfg(feature = "orchard")]
+#[cfg(all(feature = "orchard", not(feature = "zsa")))]
 impl<IvkTag, T: Tasks<TaggedOrchardBatch<IvkTag>>> OrchardTasks<IvkTag> for T {}
+
+#[cfg(all(feature = "orchard", feature = "zsa"))]
+pub(crate) trait OrchardTasks<IvkTag>:
+    Tasks<TaggedOrchardBatch<IvkTag>> + Tasks<TaggedZsaBatch<IvkTag>>
+{
+}
+#[cfg(all(feature = "orchard", feature = "zsa"))]
+impl<IvkTag, T> OrchardTasks<IvkTag> for T where
+    T: Tasks<TaggedOrchardBatch<IvkTag>> + Tasks<TaggedZsaBatch<IvkTag>>
+{
+}
 
 #[cfg(not(feature = "orchard"))]
 pub(crate) trait IronwoodTasks<IvkTag> {}
@@ -123,6 +153,8 @@ pub(crate) struct BatchRunners<
     sapling: TaggedSaplingBatchRunner<IvkTag, TS>,
     #[cfg(feature = "orchard")]
     orchard: TaggedOrchardBatchRunner<IvkTag, TO>,
+    #[cfg(all(feature = "orchard", feature = "zsa"))]
+    orchard_zsa: TaggedZsaBatchRunner<IvkTag, TO>,
     #[cfg(feature = "orchard")]
     ironwood: TaggedIronwoodBatchRunner<IvkTag, TI>,
     #[cfg(not(feature = "orchard"))]
@@ -157,6 +189,14 @@ where
             ),
             #[cfg(feature = "orchard")]
             orchard: BatchRunner::new(
+                orchard_batch_size_threshold,
+                scanning_keys
+                    .orchard()
+                    .iter()
+                    .map(|(id, key)| (id.clone(), key.prepare())),
+            ),
+            #[cfg(all(feature = "orchard", feature = "zsa"))]
+            orchard_zsa: BatchRunner::new(
                 orchard_batch_size_threshold,
                 scanning_keys
                     .orchard()
@@ -206,10 +246,24 @@ where
         });
 
         #[cfg(feature = "orchard")]
-        let orchard_batch = tx.orchard_bundle().map(|bundle| {
-            self.orchard
-                .process_outputs(OrchardDomain::for_action, bundle.actions().iter().cloned())
-        });
+        let orchard_batch = tx
+            .orchard_bundle()
+            .and_then(|bundle| bundle.as_vanilla())
+            .map(|bundle| {
+                self.orchard
+                    .process_outputs(OrchardDomain::for_action, bundle.actions().iter().cloned())
+            });
+
+        #[cfg(all(feature = "orchard", feature = "zsa"))]
+        let orchard_zsa_batch =
+            tx.orchard_bundle()
+                .and_then(|bundle| bundle.as_zsa())
+                .map(|bundle| {
+                    self.orchard_zsa.process_outputs(
+                        OrchardZSADomain::for_action,
+                        bundle.actions().iter().cloned(),
+                    )
+                });
 
         #[cfg(feature = "orchard")]
         let ironwood_batch = tx.ironwood_bundle().map(|bundle| {
@@ -222,6 +276,8 @@ where
             sapling_batch,
             #[cfg(feature = "orchard")]
             orchard_batch,
+            #[cfg(all(feature = "orchard", feature = "zsa"))]
+            orchard_zsa_batch,
             #[cfg(feature = "orchard")]
             ironwood_batch,
         }
@@ -234,6 +290,8 @@ where
         self.sapling.flush();
         #[cfg(feature = "orchard")]
         self.orchard.flush();
+        #[cfg(all(feature = "orchard", feature = "zsa"))]
+        self.orchard_zsa.flush();
         #[cfg(feature = "orchard")]
         self.ironwood.flush();
     }
@@ -245,6 +303,9 @@ pub(crate) struct PendingBatch<IvkTag> {
     sapling_batch: Option<BatchReceiver<IvkTag, SaplingDomain, <SaplingDomain as Domain>::Memo>>,
     #[cfg(feature = "orchard")]
     orchard_batch: Option<BatchReceiver<IvkTag, OrchardDomain, <OrchardDomain as Domain>::Memo>>,
+    #[cfg(all(feature = "orchard", feature = "zsa"))]
+    orchard_zsa_batch:
+        Option<BatchReceiver<IvkTag, OrchardZSADomain, <OrchardZSADomain as Domain>::Memo>>,
     #[cfg(feature = "orchard")]
     ironwood_batch: Option<BatchReceiver<IvkTag, IronwoodDomain, <IronwoodDomain as Domain>::Memo>>,
 }
@@ -261,6 +322,11 @@ impl<IvkTag> PendingBatch<IvkTag> {
             #[cfg(feature = "orchard")]
             orchard: self
                 .orchard_batch
+                .map(|b| b.into_results())
+                .unwrap_or_default(),
+            #[cfg(all(feature = "orchard", feature = "zsa"))]
+            orchard_zsa: self
+                .orchard_zsa_batch
                 .map(|b| b.into_results())
                 .unwrap_or_default(),
             #[cfg(feature = "orchard")]
@@ -286,6 +352,11 @@ impl<IvkTag> PendingBatch<IvkTag> {
             Some(b) => b.into_results_async().await,
             None => HashMap::new(),
         };
+        #[cfg(all(feature = "orchard", feature = "zsa"))]
+        let orchard_zsa = match self.orchard_zsa_batch {
+            Some(b) => b.into_results_async().await,
+            None => HashMap::new(),
+        };
         #[cfg(feature = "orchard")]
         let ironwood = match self.ironwood_batch {
             Some(b) => b.into_results_async().await,
@@ -296,6 +367,8 @@ impl<IvkTag> PendingBatch<IvkTag> {
             sapling,
             #[cfg(feature = "orchard")]
             orchard,
+            #[cfg(all(feature = "orchard", feature = "zsa"))]
+            orchard_zsa,
             #[cfg(feature = "orchard")]
             ironwood,
         }
@@ -313,6 +386,11 @@ pub struct BatchResult<IvkTag> {
     #[cfg(feature = "orchard")]
     orchard:
         HashMap<usize, DecryptedOutput<IvkTag, OrchardDomain, <OrchardDomain as Domain>::Memo>>,
+    #[cfg(all(feature = "orchard", feature = "zsa"))]
+    orchard_zsa: HashMap<
+        usize,
+        DecryptedOutput<IvkTag, OrchardZSADomain, <OrchardZSADomain as Domain>::Memo>,
+    >,
     #[cfg(feature = "orchard")]
     ironwood:
         HashMap<usize, DecryptedOutput<IvkTag, IronwoodDomain, <IronwoodDomain as Domain>::Memo>>,
@@ -501,6 +579,8 @@ where
             sapling: sapling_decrypted,
             #[cfg(feature = "orchard")]
                 orchard: orchard_decrypted,
+            #[cfg(all(feature = "orchard", feature = "zsa"))]
+                orchard_zsa: orchard_zsa_decrypted,
             #[cfg(feature = "orchard")]
                 ironwood: ironwood_decrypted,
         } = batch;
@@ -528,9 +608,9 @@ where
                 .orchard_bundle()
                 .map(|bundle| {
                     find_spent(
-                        bundle.actions().iter(),
+                        bundle.nullifiers(),
                         &nullifiers.orchard,
-                        |action| *action.nullifier(),
+                        |nullifier| *nullifier,
                         WalletSpend::from_parts,
                     )
                 })
@@ -621,6 +701,7 @@ where
         #[cfg(feature = "orchard")]
         let (orchard_outputs, mut orchard_nc) = tx
             .orchard_bundle()
+            .and_then(|bundle| bundle.as_vanilla())
             .map(|bundle| {
                 find_received(
                     height,
@@ -641,6 +722,32 @@ where
                 )
             })
             .unwrap_or_default();
+
+        #[cfg(all(feature = "orchard", feature = "zsa"))]
+        let mut orchard_outputs = orchard_outputs;
+
+        #[cfg(all(feature = "orchard", feature = "zsa"))]
+        if let Some(bundle) = tx.orchard_bundle().and_then(|bundle| bundle.as_zsa()) {
+            let (mut zsa_outputs, mut zsa_nc) = find_received(
+                height,
+                pos_tracker.tx_contains_last_orchard_actions_in_block(&tx),
+                txid,
+                |output_idx| pos_tracker.orchard_note_position(output_idx),
+                &scanning_keys.orchard,
+                &spent_from_accounts,
+                &bundle
+                    .actions()
+                    .iter()
+                    .map(|action| (OrchardZSADomain::for_action(action), action.clone()))
+                    .collect::<Vec<_>>(),
+                Some(move |_| orchard_zsa_decrypted),
+                batch::try_note_decryption,
+                |action| MerkleHashOrchard::from_cmx(action.cmx()),
+                |note| (note, orchard::ValuePool::Orchard),
+            );
+            orchard_outputs.append(&mut zsa_outputs);
+            orchard_nc.append(&mut zsa_nc);
+        }
         #[cfg(feature = "orchard")]
         orchard_note_commitments.append(&mut orchard_nc);
 
@@ -796,7 +903,7 @@ fn sapling_output_count(tx: &Transaction) -> u32 {
 #[cfg(feature = "orchard")]
 fn orchard_action_count(tx: &Transaction) -> u32 {
     tx.orchard_bundle().map_or(0, |b| {
-        u32::try_from(b.actions().len()).expect("Orchard action count cannot exceed a u32")
+        u32::try_from(b.action_count()).expect("Orchard action count cannot exceed a u32")
     })
 }
 
@@ -838,7 +945,7 @@ impl PositionTracker {
             params.activation_height(NetworkUpgrade::Nu5),
             prior_block_metadata.and_then(|m| m.orchard_tree_size()),
             vtx.iter()
-                .map(|b| b.tx.orchard_bundle().map_or(0, |bd| bd.actions().len())),
+                .map(|b| b.tx.orchard_bundle().map_or(0, |bd| bd.action_count())),
             ShieldedPool::Orchard,
         )?;
 

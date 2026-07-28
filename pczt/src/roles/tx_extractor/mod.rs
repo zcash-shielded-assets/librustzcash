@@ -204,6 +204,8 @@ impl<'a> TransactionExtractor<'a> {
                     // Skipped for now; the binding signature check above
                     // ensures the bundle is correctly authorized.
                 }
+                #[cfg(not(feature = "zsa"))]
+                _ => unreachable!("ZSA transaction requires the `zsa` feature"),
             }
         }
         if let Some(bundle) = tx.ironwood_bundle() {

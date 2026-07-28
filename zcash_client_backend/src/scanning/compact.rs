@@ -955,17 +955,20 @@ mod tests {
             let nf_old =
                 orchard::note::Nullifier::from_bytes(&pallas::Base::random(&mut rng).to_repr())
                     .unwrap();
-            let rho = Rho::from_bytes(&nf_old.to_bytes()).unwrap();
+            let rho: Rho = Rho::from_bytes(&nf_old.to_bytes()).unwrap();
             let rseed = loop {
                 let mut bytes = [0u8; 32];
                 rng.fill_bytes(&mut bytes);
-                if let Some(rseed) = Option::from(RandomSeed::from_bytes(bytes, &rho)) {
+                if let Some(rseed) =
+                    Option::<RandomSeed>::from(RandomSeed::from_bytes(bytes, &rho))
+                {
                     break rseed;
                 }
             };
             let note = Note::from_parts(
                 recipient,
                 NoteValue::from_raw(value),
+                orchard::note::AssetBase::zatoshi(),
                 rho,
                 rseed,
                 NoteVersion::V3,
@@ -984,7 +987,7 @@ mod tests {
                 nullifier: nf_old.to_bytes().to_vec(),
                 cmx: cmx.to_bytes().to_vec(),
                 ephemeral_key: ephemeral_key.0.to_vec(),
-                ciphertext: enc_ciphertext[..52].to_vec(),
+                ciphertext: enc_ciphertext.as_ref()[..52].to_vec(),
             };
 
             let mut ctx = CompactTx::default();

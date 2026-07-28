@@ -49,6 +49,7 @@ const ZCASH_SAPLING_OUTPUTS_MEMOS_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxIdSOutM
 const ZCASH_SAPLING_OUTPUTS_NONCOMPACT_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxIdSOutN__Hash";
 
 // ZSA issue bundle txid personalization (ZIP-246)
+#[cfg(feature = "zsa")]
 const ZCASH_ORCHARD_ZSA_ISSUE_PERSONALIZATION: &[u8; 16] = b"ZTxIdSAIssueHash";
 
 const ZCASH_AUTH_PERSONALIZATION_PREFIX: &[u8; 12] = b"ZTxAuthHash_";
@@ -313,8 +314,6 @@ impl<A: Authorization> TransactionDigest<A> for TxIdDigester {
     type IronwoodDigest = Option<Blake2bHash>;
     #[cfg(feature = "zsa")]
     type IssueDigest = Option<Blake2bHash>;
-    #[cfg(not(feature = "zsa"))]
-    type IssueDigest = ();
 
     type Digest = TxDigests<Blake2bHash>;
 
@@ -399,7 +398,7 @@ impl<A: Authorization> TransactionDigest<A> for TxIdDigester {
         sapling_digest: Self::SaplingDigest,
         orchard_digest: Self::OrchardDigest,
         ironwood_digest: Self::IronwoodDigest,
-        issue_digest: Self::IssueDigest,
+        #[cfg(feature = "zsa")] issue_digest: Self::IssueDigest,
     ) -> Self::Digest {
         TxDigests {
             header_digest,
@@ -407,6 +406,7 @@ impl<A: Authorization> TransactionDigest<A> for TxIdDigester {
             sapling_digest,
             orchard_digest,
             ironwood_digest,
+            #[cfg(feature = "zsa")]
             issue_digest,
         }
     }
@@ -621,8 +621,6 @@ impl TransactionDigest<Authorized> for BlockTxCommitmentDigester {
     type IronwoodDigest = Blake2bHash;
     #[cfg(feature = "zsa")]
     type IssueDigest = Blake2bHash;
-    #[cfg(not(feature = "zsa"))]
-    type IssueDigest = ();
 
     type Digest = Blake2bHash;
 
@@ -746,7 +744,7 @@ impl TransactionDigest<Authorized> for BlockTxCommitmentDigester {
         sapling_digest: Self::SaplingDigest,
         orchard_digest: Self::OrchardDigest,
         ironwood_digest: Self::IronwoodDigest,
-        #[allow(unused_variables)] issue_digest: Self::IssueDigest,
+        #[cfg(feature = "zsa")] issue_digest: Self::IssueDigest,
     ) -> Self::Digest {
         let (_txversion, consensus_branch_id) = tx_context;
         let mut personal = [0; 16];
@@ -762,6 +760,11 @@ impl TransactionDigest<Authorized> for BlockTxCommitmentDigester {
 
         if _txversion.has_ironwood() {
             h.write_all(ironwood_digest.as_bytes()).unwrap();
+        }
+
+        #[cfg(feature = "zsa")]
+        if consensus_branch_id == BranchId::Nu7 {
+            h.write_all(issue_digest.as_bytes()).unwrap();
         }
 
         h.finalize()

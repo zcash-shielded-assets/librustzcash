@@ -58,6 +58,7 @@ pub(crate) fn finalize_pczt<P: Parameters>(parts: PcztParts<P>) -> Result<pczt::
         .ok_or_else(|| BuildError::Build("pczt creation failed".into()))?;
     IoFinalizer::new(created)
         .finalize_io()
+        .map(|(pczt, _)| pczt)
         .map_err(|e| BuildError::Build(format!("io finalize: {e:?}")))
 }
 

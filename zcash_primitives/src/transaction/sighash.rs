@@ -51,6 +51,7 @@ pub fn signature_hash<
         TxVersion::V5 => v5_signature_hash(tx, signable_input, txid_parts),
 
         TxVersion::V6 => {
+            #[cfg(feature = "zsa")]
             use zcash_protocol::consensus::BranchId;
             #[cfg(feature = "zsa")]
             if tx.consensus_branch_id == BranchId::Nu7 {

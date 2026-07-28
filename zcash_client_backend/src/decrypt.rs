@@ -21,6 +21,9 @@ use orchard::note_encryption::{
     DomainVersion, IronwoodVersion, NoteEncryptionDomain, OrchardVersion,
 };
 
+#[cfg(all(feature = "orchard", feature = "zsa"))]
+use orchard::zsa::OrchardZSADomain;
+
 /// An enumeration of the possible relationships a TXO can have to the wallet.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum TransferType {
@@ -264,10 +267,67 @@ pub fn decrypt_transaction<'a, P: consensus::Parameters, AccountId: Copy>(
             })
     }
 
+    #[cfg(all(feature = "orchard", feature = "zsa"))]
+    fn decrypt_zsa_bundle<AccountId: Copy>(
+        ufvks: &HashMap<AccountId, UnifiedFullViewingKey>,
+        bundle: &orchard::bundle::Bundle<
+            orchard::bundle::Authorized,
+            zcash_protocol::value::ZatBalance,
+            OrchardZSADomain,
+        >,
+    ) -> impl Iterator<Item = DecryptedOutput<(orchard::Note, orchard::ValuePool), AccountId>> {
+        ufvks
+            .iter()
+            .flat_map(|(account, ufvk)| ufvk.orchard().into_iter().map(|fvk| (*account, fvk)))
+            .flat_map(move |(account, fvk)| {
+                let ivk_external =
+                    orchard::keys::PreparedIncomingViewingKey::new(&fvk.to_ivk(Scope::External));
+                let ivk_internal =
+                    orchard::keys::PreparedIncomingViewingKey::new(&fvk.to_ivk(Scope::Internal));
+                let ovk = fvk.to_ovk(Scope::External);
+
+                bundle
+                    .actions()
+                    .iter()
+                    .enumerate()
+                    .flat_map(move |(index, action)| {
+                        let domain = OrchardZSADomain::for_action(action);
+                        try_note_decryption(&domain, &ivk_external, action)
+                            .map(|ret| (ret, TransferType::Incoming))
+                            .or_else(|| {
+                                try_note_decryption(&domain, &ivk_internal, action)
+                                    .map(|ret| (ret, TransferType::AccountInternal))
+                            })
+                            .or_else(|| {
+                                try_output_recovery_with_ovk(
+                                    &domain,
+                                    &ovk,
+                                    action,
+                                    action.cv_net(),
+                                    &action.encrypted_note().out_ciphertext,
+                                )
+                                .map(|ret| (ret, TransferType::Outgoing))
+                            })
+                            .into_iter()
+                            .map(move |((note, _, memo), transfer_type)| {
+                                DecryptedOutput::new(
+                                    index,
+                                    (note, orchard::ValuePool::Orchard),
+                                    ShieldedPool::Orchard,
+                                    account,
+                                    MemoBytes::from_bytes(&memo).expect("correct length"),
+                                    transfer_type,
+                                )
+                            })
+                    })
+            })
+    }
+
     #[cfg(feature = "orchard")]
     let orchard_outputs = tx
         .orchard_bundle()
-        .iter()
+        .and_then(|bundle| bundle.as_vanilla())
+        .into_iter()
         .flat_map(|bundle| {
             decrypt_orchard_protocol_bundle::<OrchardVersion, _>(
                 ufvks,
@@ -275,7 +335,15 @@ pub fn decrypt_transaction<'a, P: consensus::Parameters, AccountId: Copy>(
                 orchard::ValuePool::Orchard,
             )
         })
-        .collect();
+        .collect::<Vec<_>>();
+
+    #[cfg(all(feature = "orchard", feature = "zsa"))]
+    let mut orchard_outputs = orchard_outputs;
+
+    #[cfg(all(feature = "orchard", feature = "zsa"))]
+    if let Some(bundle) = tx.orchard_bundle().and_then(|bundle| bundle.as_zsa()) {
+        orchard_outputs.extend(decrypt_zsa_bundle(ufvks, bundle));
+    }
 
     #[cfg(feature = "orchard")]
     let ironwood_outputs = tx

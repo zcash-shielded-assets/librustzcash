@@ -83,8 +83,8 @@ pub fn regtest_network(nu6_3_active: bool) -> LocalNetwork {
         nu6_1: Some(BlockHeight::from_u32(8)),
         nu6_2: Some(BlockHeight::from_u32(9)),
         nu6_3,
-        #[cfg(zcash_unstable = "nu7")]
         nu7: None,
+        orchard_mode: zcash_protocol::consensus::OrchardMode::Normal,
     }
 }
 
@@ -104,9 +104,16 @@ fn orchard_note(fvk: &FullViewingKey, value: u64, rng: &mut ChaCha8Rng) -> Note 
             break rseed;
         }
     };
-    Note::from_parts(recipient, note_value, rho, rseed, NoteVersion::V2)
-        .into_option()
-        .expect("valid note parts")
+    Note::from_parts(
+        recipient,
+        note_value,
+        orchard::note::AssetBase::zatoshi(),
+        rho,
+        rseed,
+        NoteVersion::V2,
+    )
+    .into_option()
+    .expect("valid note parts")
 }
 
 /// An Orchard note of `value` owned by `fvk`, with its randomness derived from `seed` (so

@@ -1013,11 +1013,12 @@ mod tests {
     fn orchard_note(value: u64, version: NoteVersion) -> Option<OrchardNote> {
         let sk: SpendingKey = Option::from(SpendingKey::from_bytes([0x2a; 32]))?;
         let recipient = FullViewingKey::from(&sk).address_at(0u32, zip32::Scope::External);
-        let rho = Option::from(Rho::from_bytes(&[0; 32]))?;
-        let rseed = Option::from(RandomSeed::from_bytes([0x1b; 32], &rho))?;
+        let rho: Rho = Option::from(Rho::from_bytes(&[0; 32]))?;
+        let rseed: RandomSeed = Option::from(RandomSeed::from_bytes([0x1b; 32], &rho))?;
         Option::from(OrchardNote::from_parts(
             recipient,
             NoteValue::from_raw(value),
+            orchard::note::AssetBase::zatoshi(),
             rho,
             rseed,
             version,

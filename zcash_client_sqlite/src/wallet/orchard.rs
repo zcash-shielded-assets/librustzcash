@@ -61,13 +61,13 @@ pub(crate) fn to_received_note<P: consensus::Parameters>(
         SqliteClientError::CorruptedData("Note values must be nonnegative".to_string())
     })?;
 
-    let rho = {
+    let rho: Rho = {
         let rho_bytes: [u8; 32] = row.get("rho")?;
         Option::from(Rho::from_bytes(&rho_bytes))
             .ok_or_else(|| SqliteClientError::CorruptedData("Invalid rho.".to_string()))
     }?;
 
-    let rseed = {
+    let rseed: RandomSeed = {
         let rseed_bytes: [u8; 32] = row.get("rseed")?;
         Option::from(RandomSeed::from_bytes(rseed_bytes, &rho)).ok_or_else(|| {
             SqliteClientError::CorruptedData("Invalid Orchard random seed.".to_string())
@@ -124,6 +124,7 @@ pub(crate) fn to_received_note<P: consensus::Parameters>(
             let note = Option::from(Note::from_parts(
                 recipient,
                 orchard::value::NoteValue::from_raw(note_value),
+                orchard::note::AssetBase::zatoshi(),
                 rho,
                 rseed,
                 note_version,
@@ -404,7 +405,7 @@ pub(crate) fn select_unspent_note_meta(
 pub(crate) fn note_version_code(version: NoteVersion) -> i64 {
     match version {
         NoteVersion::V2 => 2,
-        NoteVersion::V3 => 3,
+        _ => 3,
     }
 }
 
@@ -1117,12 +1118,13 @@ pub(crate) mod tests {
         // outputs skip address derivation, and this test exercises only note storage.
         let sk: SpendingKey = Option::from(SpendingKey::from_bytes([0x2a; 32])).unwrap();
         let recipient = FullViewingKey::from(&sk).address_at(0u32, zip32::Scope::External);
-        let rho = Option::from(Rho::from_bytes(&[0; 32])).unwrap();
-        let rseed = Option::from(RandomSeed::from_bytes([0x1b; 32], &rho)).unwrap();
+        let rho: Rho = Option::from(Rho::from_bytes(&[0; 32])).unwrap();
+        let rseed: RandomSeed = Option::from(RandomSeed::from_bytes([0x1b; 32], &rho)).unwrap();
         let note = |value: u64, version: NoteVersion| {
             Option::from(Note::from_parts(
                 recipient,
                 NoteValue::from_raw(value),
+                orchard::note::AssetBase::zatoshi(),
                 rho,
                 rseed,
                 version,
@@ -2986,6 +2988,7 @@ pub(crate) mod tests {
                 prop_assert!(
                     tx.orchard_bundle()
                         .into_iter()
+                        .filter_map(|bundle| bundle.as_vanilla())
                         .flat_map(|bundle| bundle.actions())
                         .any(|action| action.nullifier().to_bytes() == spent_nf),
                     "the Orchard spend must remain in the Orchard bundle",

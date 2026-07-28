@@ -924,7 +924,7 @@ proptest! {
     }
 }
 
-#[cfg(all(test))]
+#[cfg(test)]
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(10))]
     #[test]
@@ -1232,7 +1232,10 @@ fn zip_0233() {
             test_bundle,
             txdata.sprout_bundle().cloned(),
             txdata.sapling_bundle().cloned(),
-            txdata.orchard_bundle().cloned(),
+            txdata
+                .orchard_bundle()
+                .and_then(|bundle| bundle.as_vanilla())
+                .cloned(),
         );
 
         (tdata, txdata.digest(TxIdDigester))

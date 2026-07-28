@@ -817,6 +817,26 @@ pub enum OrchardPcztBundle {
     Zsa(orchard::pczt::Bundle<orchard::zsa::OrchardZSADomain>),
 }
 
+impl OrchardPcztBundle {
+    /// Returns the standard Orchard PCZT bundle, or `None` for a ZSA bundle.
+    pub fn as_vanilla(&self) -> Option<&orchard::pczt::Bundle> {
+        match self {
+            Self::Vanilla(bundle) => Some(bundle),
+            #[cfg(feature = "zsa")]
+            Self::Zsa(_) => None,
+        }
+    }
+
+    /// Returns the ZSA Orchard PCZT bundle, or `None` for a standard bundle.
+    #[cfg(feature = "zsa")]
+    pub fn as_zsa(&self) -> Option<&orchard::pczt::Bundle<orchard::zsa::OrchardZSADomain>> {
+        match self {
+            Self::Vanilla(_) => None,
+            Self::Zsa(bundle) => Some(bundle),
+        }
+    }
+}
+
 /// Returns `true` if the given Orchard bundle version is the ZSA (Nu7) version, which selects
 /// the 612-byte [`orchard::zsa::OrchardZSADomain`] note-encryption domain.
 #[cfg(feature = "zsa")]
@@ -1130,12 +1150,9 @@ impl<P: consensus::Parameters, U> Builder<P, U> {
         ovk: Option<orchard::keys::OutgoingViewingKey>,
         recipient: orchard::Address,
         value: Zatoshis,
-        #[cfg(feature = "zsa")] asset: orchard::note::AssetBase,
+        asset: orchard::note::AssetBase,
         memo: MemoBytes,
     ) -> Result<(), Error<FE>> {
-        #[cfg(not(feature = "zsa"))]
-        let asset = orchard::note::AssetBase::zatoshi();
-
         self.orchard_builder
             .as_mut()
             .ok_or(Error::OrchardBuilderNotAvailable)?
@@ -1161,12 +1178,9 @@ impl<P: consensus::Parameters, U> Builder<P, U> {
         ovk: Option<orchard::keys::OutgoingViewingKey>,
         recipient: orchard::Address,
         value: Zatoshis,
-        #[cfg(feature = "zsa")] asset: orchard::note::AssetBase,
+        asset: orchard::note::AssetBase,
         memo: MemoBytes,
     ) -> Result<(), Error<FE>> {
-        #[cfg(not(feature = "zsa"))]
-        let asset = orchard::note::AssetBase::zatoshi();
-
         self.orchard_builder
             .as_mut()
             .ok_or(Error::OrchardBuilderNotAvailable)?
@@ -1814,10 +1828,10 @@ impl<P: consensus::Parameters, U> Builder<P, U> {
         self,
         mut rng: R,
         fee_rule: &FR,
-        #[cfg(feature = "zsa")] is_new_asset: impl Fn(&orchard::note::AssetBase) -> bool,
+        _is_new_asset: impl Fn(&orchard::note::AssetBase) -> bool,
     ) -> Result<PcztResult<P>, Error<FR::Error>> {
         #[cfg(feature = "zsa")]
-        let fee = self.get_fee(fee_rule, is_new_asset).map_err(Error::Fee)?;
+        let fee = self.get_fee(fee_rule, _is_new_asset).map_err(Error::Fee)?;
         #[cfg(not(feature = "zsa"))]
         let fee = self.get_fee(fee_rule).map_err(Error::Fee)?;
         self.check_version_compatibility::<FR::Error>(self.tx_version)?;
@@ -2083,7 +2097,7 @@ mod tests {
         }
     }
 
-    #[cfg(all(feature = "circuits"))]
+    #[cfg(feature = "circuits")]
     fn nu7_test_network() -> zcash_protocol::local_consensus::LocalNetwork {
         use zcash_protocol::consensus::BlockHeight;
 
@@ -2163,7 +2177,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(all(feature = "circuits"))]
+    #[cfg(feature = "circuits")]
     fn nu7_coinbase_builder_exposes_orchard_v2() {
         let builder = Builder::new(
             nu7_test_network(),

@@ -874,10 +874,11 @@ where
 fn find_received<
     AccountId: Copy + Eq + Hash,
     D: BatchDomain,
+    KeyDomain: Domain<Note = D::Note, IncomingViewingKey = D::IncomingViewingKey>,
     M,
     Nf,
     IvkTag: Copy + std::hash::Hash + Eq + Send + 'static,
-    SK: ScanningKeyOps<D, AccountId, Nf>,
+    SK: ScanningKeyOps<KeyDomain, AccountId, Nf>,
     Output: ShieldedOutput<D>,
     NoteCommitment,
     Note,
