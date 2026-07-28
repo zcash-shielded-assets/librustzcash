@@ -461,7 +461,7 @@ pub mod testing {
         } else if v.has_orchard() {
             // The Orchard slot uses `orchard_v3()` in a v6 transaction (cross-address forbidden)
             // and `orchard_v2()` in a v5 transaction; the Ironwood slot is generated separately by
-            // `arb_ironwood_bundle_for_version`.
+            // `arb_ironwood_bundle_for_branch`.
             let bundle_version = orchard_bundle_version(v);
             (1usize..100)
                 .prop_flat_map(move |n| {
@@ -475,13 +475,16 @@ pub mod testing {
         }
     }
 
-    /// Generates Ironwood bundles for the v6 transaction format. Unlike the Orchard v6 pool, the
-    /// Ironwood pool ([`BundleVersion::ironwood_v3`]) permits cross-address transfers, so this
-    /// exercises the Ironwood serialization path the Orchard generator cannot.
-    pub fn arb_ironwood_bundle_for_version(
+    /// Generates Ironwood bundles for the v6 transaction format outside NU7.
+    ///
+    /// Unlike the Orchard v6 pool, the Ironwood pool ([`BundleVersion::ironwood_v3`]) permits
+    /// cross-address transfers, so this exercises the Ironwood serialization path the Orchard
+    /// generator cannot. NU7 uses the issuance slot instead of Ironwood.
+    pub fn arb_ironwood_bundle_for_branch(
         v: TxVersion,
+        branch_id: BranchId,
     ) -> impl Strategy<Value = Option<Bundle<Authorized, ZatBalance>>> {
-        if v.has_ironwood() {
+        if v.has_ironwood() && branch_id != BranchId::Nu7 {
             (1usize..100)
                 .prop_flat_map(|n| {
                     prop::option::of(

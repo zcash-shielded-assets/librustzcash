@@ -222,12 +222,14 @@ pub(crate) mod testing {
                 value: None,
                 rho: None,
                 rseed: None,
+                rseed_split_note: None,
                 fvk: None,
                 witness: None,
                 alpha: None,
                 zip32_derivation: None,
                 dummy_sk: None,
                 proprietary: BTreeMap::new(),
+                asset: None,
             },
             output: Output {
                 cmx: Some([4; 32]),
@@ -241,6 +243,7 @@ pub(crate) mod testing {
                 zip32_derivation: None,
                 user_address: None,
                 proprietary: BTreeMap::new(),
+                asset: None,
             },
             rcv: None,
         }
@@ -345,28 +348,47 @@ fn recover_memo_plaintext_from_ciphertext_and_action(
         note_encryption::{CompactAction, IronwoodDomain, OrchardDomain},
         value::NoteValue,
     };
-    use zcash_note_encryption::{COMPACT_NOTE_SIZE, try_output_recovery_with_pkd_esk};
+    use zcash_note_encryption::{
+        COMPACT_NOTE_SIZE, note_bytes::NoteBytesData, try_output_recovery_with_pkd_esk,
+    };
 
     struct OutputRecoveryData {
-        cmx: [u8; 32],
+        cmx: ExtractedNoteCommitment,
         ephemeral_key: [u8; 32],
-        enc_ciphertext: [u8; ENC_CIPHERTEXT_SIZE],
+        enc_ciphertext: NoteBytesData<ENC_CIPHERTEXT_SIZE>,
     }
 
-    impl<D> ShieldedOutput<D, ENC_CIPHERTEXT_SIZE> for OutputRecoveryData
+    impl<D> ShieldedOutput<D> for OutputRecoveryData
     where
-        D: Domain<ExtractedCommitmentBytes = [u8; 32]>,
+        D: Domain<
+                ExtractedCommitment = ExtractedNoteCommitment,
+                ExtractedCommitmentBytes = [u8; 32],
+                NoteCiphertextBytes = NoteBytesData<ENC_CIPHERTEXT_SIZE>,
+                CompactNoteCiphertextBytes = NoteBytesData<COMPACT_NOTE_SIZE>,
+            >,
     {
         fn ephemeral_key(&self) -> EphemeralKeyBytes {
             EphemeralKeyBytes(self.ephemeral_key)
         }
 
-        fn cmstar_bytes(&self) -> [u8; 32] {
-            self.cmx
+        fn cmstar(&self) -> &ExtractedNoteCommitment {
+            &self.cmx
         }
 
-        fn enc_ciphertext(&self) -> &[u8; ENC_CIPHERTEXT_SIZE] {
-            &self.enc_ciphertext
+        fn cmstar_bytes(&self) -> [u8; 32] {
+            self.cmx.to_bytes()
+        }
+
+        fn enc_ciphertext(&self) -> Option<&NoteBytesData<ENC_CIPHERTEXT_SIZE>> {
+            Some(&self.enc_ciphertext)
+        }
+
+        fn enc_ciphertext_compact(&self) -> NoteBytesData<COMPACT_NOTE_SIZE> {
+            NoteBytesData(
+                self.enc_ciphertext.0[..COMPACT_NOTE_SIZE]
+                    .try_into()
+                    .unwrap(),
+            )
         }
     }
 
@@ -376,7 +398,14 @@ fn recover_memo_plaintext_from_ciphertext_and_action(
         output: &OutputRecoveryData,
     ) -> Option<MemoPlaintext>
     where
-        D: Domain<Note = Note, Memo = [u8; MEMO_SIZE], ExtractedCommitmentBytes = [u8; 32]>,
+        D: Domain<
+                Note = Note,
+                Memo = [u8; MEMO_SIZE],
+                ExtractedCommitment = ExtractedNoteCommitment,
+                ExtractedCommitmentBytes = [u8; 32],
+                NoteCiphertextBytes = NoteBytesData<ENC_CIPHERTEXT_SIZE>,
+                CompactNoteCiphertextBytes = NoteBytesData<COMPACT_NOTE_SIZE>,
+            >,
     {
         let pk_d = D::get_pk_d(note);
         let esk = D::derive_esk(note)?;
@@ -395,9 +424,16 @@ fn recover_memo_plaintext_from_ciphertext_and_action(
     ))?;
     let rho = Option::from(Rho::from_bytes(&action.spend.nullifier))?;
     let rseed = Option::from(RandomSeed::from_bytes(*action.output.rseed.as_ref()?, &rho))?;
+    let asset = action
+        .output
+        .asset
+        .as_ref()
+        .and_then(|asset| Option::from(::orchard::note::AssetBase::from_bytes(asset)))
+        .unwrap_or_else(::orchard::note::AssetBase::zatoshi);
     let note = Option::from(Note::from_parts(
         recipient,
         NoteValue::from_raw(action.output.value?),
+        asset,
         rho,
         rseed,
         note_version,
@@ -409,15 +445,17 @@ fn recover_memo_plaintext_from_ciphertext_and_action(
     let cmx_bytes = action.output.cmx?;
     let cmx = Option::from(ExtractedNoteCommitment::from_bytes(&cmx_bytes))?;
     let output = OutputRecoveryData {
-        cmx: cmx_bytes,
+        cmx,
         ephemeral_key: action.output.ephemeral_key,
-        enc_ciphertext,
+        enc_ciphertext: NoteBytesData(enc_ciphertext),
     };
     let compact_action = CompactAction::from_parts(
         nullifier,
         cmx,
         EphemeralKeyBytes(action.output.ephemeral_key),
-        output.enc_ciphertext[..COMPACT_NOTE_SIZE].try_into().ok()?,
+        output.enc_ciphertext.0[..COMPACT_NOTE_SIZE]
+            .try_into()
+            .ok()?,
     );
 
     match note_version {
@@ -431,6 +469,8 @@ fn recover_memo_plaintext_from_ciphertext_and_action(
             &note,
             &output,
         ),
+        #[cfg(feature = "zsa")]
+        NoteVersion::V3ZSA => None,
     }
 }
 
@@ -916,6 +956,7 @@ pub mod v1 {
                 zip32_derivation: output.zip32_derivation,
                 user_address: output.user_address,
                 proprietary: output.proprietary,
+                asset: output.asset,
             })
         }
     }
@@ -934,6 +975,7 @@ pub mod v1 {
                 zip32_derivation: output.zip32_derivation,
                 user_address: output.user_address,
                 proprietary: output.proprietary,
+                asset: output.asset,
             }
         }
     }
@@ -1241,12 +1283,14 @@ pub(crate) mod v2 {
                     value: None,
                     rho: None,
                     rseed: None,
+                    rseed_split_note: None,
                     fvk: None,
                     witness: None,
                     alpha: None,
                     zip32_derivation: None,
                     dummy_sk: None,
                     proprietary: BTreeMap::new(),
+                    asset: None,
                 },
                 output: Output {
                     cmx,
@@ -1260,6 +1304,7 @@ pub(crate) mod v2 {
                     zip32_derivation: None,
                     user_address: None,
                     proprietary: BTreeMap::new(),
+                    asset: None,
                 },
                 rcv: None,
             }
@@ -1368,6 +1413,7 @@ pub(crate) mod v2 {
             let note = Option::from(Note::from_parts(
                 recipient,
                 value,
+                ::orchard::note::AssetBase::zatoshi(),
                 rho,
                 rseed,
                 NoteVersion::V2,
@@ -1386,18 +1432,20 @@ pub(crate) mod v2 {
                     value: None,
                     rho: None,
                     rseed: None,
+                    rseed_split_note: None,
                     fvk: None,
                     witness: None,
                     alpha: None,
                     zip32_derivation: None,
                     dummy_sk: None,
                     proprietary: BTreeMap::new(),
+                    asset: None,
                 },
                 output: Output {
                     cmx: Some(ExtractedNoteCommitment::from(note.commitment()).to_bytes()),
                     ephemeral_key: OrchardDomain::epk_bytes(encryptor.epk()).0,
                     enc_ciphertext: EncCiphertext::Encrypted(
-                        encryptor.encrypt_note_plaintext().to_vec(),
+                        encryptor.encrypt_note_plaintext().as_ref().to_vec(),
                     ),
                     out_ciphertext: Vec::new(),
                     recipient: Some(recipient.to_raw_address_bytes()),
@@ -1407,6 +1455,7 @@ pub(crate) mod v2 {
                     zip32_derivation: None,
                     user_address: None,
                     proprietary: BTreeMap::new(),
+                    asset: None,
                 },
                 rcv: None,
             }
@@ -1900,9 +1949,13 @@ pub(crate) fn verify_witnesses_root_to_anchor<D: zcash_note_encryption::Domain>(
             .rseed()
             .ok_or(AnchorConsistencyError::IncompleteSpendData)?;
 
-        let note = orchard::Note::from_parts(recipient, *value, rho, rseed, *spend.note_version())
-            .into_option()
-            .ok_or(AnchorConsistencyError::IncompleteSpendData)?;
+        let asset = spend
+            .asset()
+            .unwrap_or_else(orchard::note::AssetBase::zatoshi);
+        let note =
+            orchard::Note::from_parts(recipient, *value, asset, rho, rseed, *spend.note_version())
+                .into_option()
+                .ok_or(AnchorConsistencyError::IncompleteSpendData)?;
         let cmx = orchard::note::ExtractedNoteCommitment::from(note.commitment());
         let computed_anchor = witness.root(cmx);
 
@@ -1958,6 +2011,10 @@ impl Output {
                 self.value
                     .ok_or(ParseError::InvalidExtractedNoteCommitment)?,
             ),
+            self.asset
+                .as_ref()
+                .and_then(|asset| Option::from(::orchard::note::AssetBase::from_bytes(asset)))
+                .unwrap_or_else(::orchard::note::AssetBase::zatoshi),
             rho,
             rseed,
             note_version,
@@ -2016,6 +2073,10 @@ impl Output {
         let note = Note::from_parts(
             recipient,
             NoteValue::from_raw(self.value.ok_or(ParseError::InvalidEncCiphertext)?),
+            self.asset
+                .as_ref()
+                .and_then(|asset| Option::from(::orchard::note::AssetBase::from_bytes(asset)))
+                .unwrap_or_else(::orchard::note::AssetBase::zatoshi),
             rho,
             rseed,
             note_version,
@@ -2024,7 +2085,7 @@ impl Output {
         .ok_or(ParseError::InvalidEncCiphertext)?;
         let encryptor = OrchardNoteEncryption::new(None, note, memo);
         let ephemeral_key = OrchardDomain::epk_bytes(encryptor.epk()).0;
-        let enc_ciphertext = encryptor.encrypt_note_plaintext().to_vec();
+        let enc_ciphertext = encryptor.encrypt_note_plaintext().as_ref().to_vec();
 
         if ephemeral_key != self.ephemeral_key {
             return Err(ParseError::InvalidEncCiphertext);
@@ -2196,7 +2257,7 @@ impl Bundle {
         // transactions.
         #[inline(never)]
         fn parse_action_inner<D: zcash_note_encryption::Domain>(
-            mut action: Action,
+            action: Action,
             note_version: NoteVersion,
             preverified: bool,
         ) -> Result<orchard::pczt::Action<D>, orchard::pczt::ParseError> {

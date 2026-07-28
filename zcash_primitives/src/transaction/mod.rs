@@ -66,6 +66,15 @@ pub enum OrchardBundle<A: orchard::bundle::Authorization> {
 }
 
 impl<A: orchard::bundle::Authorization> OrchardBundle<A> {
+    /// Returns the standard Orchard inner bundle, or `None` for a ZSA bundle.
+    pub fn as_vanilla(&self) -> Option<&orchard::Bundle<A, ZatBalance>> {
+        match self {
+            Self::OrchardVanilla(bundle) => Some(bundle),
+            #[cfg(feature = "zsa")]
+            Self::OrchardZSA(_) => None,
+        }
+    }
+
     pub fn value_balance(&self) -> &ZatBalance {
         match self {
             Self::OrchardVanilla(b) => b.value_balance(),
@@ -1427,6 +1436,11 @@ impl Transaction {
         self.write_v6_header(&mut writer)?;
 
         self.write_transparent(&mut writer)?;
+        if let Some(bundle) = &self.transparent_bundle {
+            for _ in &bundle.vin {
+                Vector::write(&mut writer, &[0u8], |w, b| w.write_u8(*b))?;
+            }
+        }
         sapling_serialization::write_v6_bundle(&mut writer, self.sapling_bundle.as_ref())?;
         components::orchard_zsa::write_v6_bundle_zsa(
             &mut writer,
@@ -1623,7 +1637,7 @@ pub mod testing {
             transparent_bundle in transparent::arb_bundle(),
             sapling_bundle in sapling::arb_bundle_for_version(version),
             orchard_bundle in orchard::arb_bundle_for_branch(version, consensus_branch_id),
-            ironwood_bundle in orchard::arb_ironwood_bundle_for_version(version),
+            ironwood_bundle in orchard::arb_ironwood_bundle_for_branch(version, consensus_branch_id),
             version in Just(version),
         ) -> TransactionData<Authorized> {
             TransactionData {
@@ -1653,7 +1667,7 @@ pub mod testing {
             transparent_bundle in transparent::arb_bundle(),
             sapling_bundle in sapling::arb_bundle_for_version(version),
             orchard_bundle in orchard::arb_bundle_for_branch(version, consensus_branch_id),
-            ironwood_bundle in orchard::arb_ironwood_bundle_for_version(version),
+            ironwood_bundle in orchard::arb_ironwood_bundle_for_branch(version, consensus_branch_id),
             version in Just(version),
         ) -> TransactionData<Authorized> {
             TransactionData {

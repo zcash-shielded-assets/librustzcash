@@ -280,12 +280,14 @@ mod tests {
                         value: None,
                         rho: None,
                         rseed: None,
+                        rseed_split_note: None,
                         fvk,
                         witness: None,
                         alpha: None,
                         zip32_derivation: None,
                         dummy_sk: None,
                         proprietary: BTreeMap::new(),
+                        asset: None,
                     },
                     output: Output {
                         cmx: Some([0; 32]),
@@ -299,6 +301,7 @@ mod tests {
                         zip32_derivation: None,
                         user_address: Option::<String>::None,
                         proprietary: BTreeMap::new(),
+                        asset: None,
                     },
                     rcv: None,
                 })

@@ -700,7 +700,7 @@ impl<P: consensus::Parameters> DeferredPcztBuilder<P> {
                 .orchard_builder
                 .build_for_pczt(&mut rng)
                 .map_err(Error::OrchardBuild)?;
-            (Some(bundle), meta)
+            (Some(OrchardPcztBundle::Vanilla(bundle)), meta)
         } else {
             (None, orchard::builder::BundleMetadata::empty())
         };
@@ -725,6 +725,8 @@ impl<P: consensus::Parameters> DeferredPcztBuilder<P> {
                 sapling: None,
                 orchard: orchard_bundle,
                 ironwood: ironwood_bundle,
+                #[cfg(feature = "zsa")]
+                issuance_builder: None,
             },
             sapling_meta: SaplingMetadata::empty(),
             orchard_meta,
@@ -1137,7 +1139,7 @@ impl<P: consensus::Parameters, U> Builder<P, U> {
         self.orchard_builder
             .as_mut()
             .ok_or(Error::OrchardBuilderNotAvailable)?
-            .add_output(
+            .add_output_with_asset(
                 ovk,
                 recipient,
                 orchard::value::NoteValue::from_raw(value.into()),
@@ -1168,7 +1170,7 @@ impl<P: consensus::Parameters, U> Builder<P, U> {
         self.orchard_builder
             .as_mut()
             .ok_or(Error::OrchardBuilderNotAvailable)?
-            .add_change_output(
+            .add_change_output_with_asset(
                 fvk,
                 ovk,
                 recipient,
@@ -1222,7 +1224,7 @@ impl<P: consensus::Parameters, U> Builder<P, U> {
         self.ironwood_builder
             .as_mut()
             .ok_or(Error::IronwoodBuilderNotAvailable)?
-            .add_output(
+            .add_output_with_asset(
                 ovk,
                 recipient,
                 orchard::value::NoteValue::from_raw(value.into()),
@@ -2506,7 +2508,7 @@ mod tests {
             );
             let recipient = change_fvk.address_at(0u32, orchard::keys::Scope::Internal);
             builder
-                .add_change_output(
+                .add_change_output_with_asset(
                     change_fvk,
                     None,
                     recipient,
@@ -2632,6 +2634,7 @@ mod tests {
         let note = orchard::Note::from_parts(
             recipient,
             orchard::value::NoteValue::from_raw(100_000),
+            orchard::note::AssetBase::zatoshi(),
             rho,
             rseed,
             orchard::note::NoteVersion::V2,
@@ -2672,12 +2675,16 @@ mod tests {
             .build_for_pczt(
                 OsRng,
                 &crate::transaction::fees::zip317::FeeRule::standard(),
+                #[cfg(feature = "zsa")]
+                |_| false,
             )
             .unwrap();
-        assert_eq!(
-            result.pczt_parts.orchard.as_ref().unwrap().actions().len(),
-            2
-        );
+        let orchard_action_count = match result.pczt_parts.orchard.as_ref().unwrap() {
+            super::OrchardPcztBundle::Vanilla(bundle) => bundle.actions().len(),
+            #[cfg(feature = "zsa")]
+            super::OrchardPcztBundle::Zsa(bundle) => bundle.actions().len(),
+        };
+        assert_eq!(orchard_action_count, 2);
         assert_eq!(
             result.pczt_parts.ironwood.as_ref().unwrap().actions().len(),
             1

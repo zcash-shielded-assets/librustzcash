@@ -42,6 +42,7 @@ use {
     },
 };
 
+#[cfg(feature = "tx-extractor")]
 use zcash_primitives::transaction::OrchardBundle;
 #[cfg(any(feature = "io-finalizer", feature = "signer"))]
 use zcash_primitives::transaction::sighash_v6::v6_signature_hash;
@@ -327,7 +328,7 @@ pub mod v2 {
 
         use super::Pczt;
         use crate::{
-            orchard::{Action, NoteVersion, Output, Spend},
+            orchard::{Action, EncCiphertext, NoteVersion, Output, Spend},
             roles::creator::Creator,
         };
 
@@ -421,11 +422,18 @@ pub mod v2 {
             let spend_asset = [7; 32];
             let output_asset = [9; 32];
             let rseed_split_note = [11; 32];
-            let mut pczt = Creator::new(BranchId::Nu7.into(), 10_000_000, 133, [0; 32], [0; 32])
-                .expect("NU7 is supported")
-                .build();
+            let mut pczt = Creator::new(
+                BranchId::Nu7.into(),
+                10_000_000,
+                133,
+                Some([0; 32]),
+                Some([0; 32]),
+            )
+            .expect("NU7 is supported")
+            .build()
+            .expect("NU7 PCZT is valid");
             pczt.orchard.actions.push(Action {
-                cv_net: [0; 32],
+                cv_net: Some([0; 32]),
                 spend: Spend {
                     nullifier: [0; 32],
                     rk: [0; 32],
@@ -444,9 +452,9 @@ pub mod v2 {
                     asset: Some(spend_asset),
                 },
                 output: Output {
-                    cmx: [0; 32],
+                    cmx: Some([0; 32]),
                     ephemeral_key: [0; 32],
-                    enc_ciphertext: vec![],
+                    enc_ciphertext: EncCiphertext::Encrypted(vec![]),
                     out_ciphertext: vec![],
                     recipient: None,
                     value: Some(10),

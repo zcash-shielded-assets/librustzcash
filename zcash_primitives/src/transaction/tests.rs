@@ -220,7 +220,9 @@ fn v6_branch_reconstruction_preserves_ironwood_bundle() {
         tx_data.transparent_bundle().cloned(),
         tx_data.sprout_bundle().cloned(),
         tx_data.sapling_bundle().cloned(),
-        tx_data.orchard_bundle().cloned(),
+        tx_data
+            .orchard_bundle()
+            .and_then(|b| b.as_vanilla().cloned()),
     )
     .freeze()
     .unwrap();
@@ -235,7 +237,9 @@ fn v6_branch_reconstruction_preserves_ironwood_bundle() {
         Zatoshis::const_from_u64(0),
         tx_data.transparent_bundle().cloned(),
         tx_data.sapling_bundle().cloned(),
-        tx_data.orchard_bundle().cloned(),
+        tx_data
+            .orchard_bundle()
+            .and_then(|b| b.as_vanilla().cloned()),
         tx_data.ironwood_bundle().cloned(),
     )
     .freeze()
@@ -1075,7 +1079,9 @@ fn zip_0244() {
             test_bundle,
             txdata.sprout_bundle().cloned(),
             txdata.sapling_bundle().cloned(),
-            txdata.orchard_bundle().cloned(),
+            txdata
+                .orchard_bundle()
+                .and_then(|b| b.as_vanilla().cloned()),
         );
         (tdata, txdata.digest(TxIdDigester))
     }

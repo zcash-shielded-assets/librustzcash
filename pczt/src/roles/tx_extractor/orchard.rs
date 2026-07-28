@@ -7,7 +7,7 @@ pub(super) fn verify_bundle(
     orchard_vk: Option<&VerifyingKey>,
     sighash: [u8; 32],
 ) -> Result<(), OrchardError> {
-    let is_zsa = bundle.bundle_version().circuit_version().is_zsa();
+    let is_zsa = bundle.bundle_version().is_zsa();
     match orchard_vk {
         Some(vk) => verify_bundle_with_key(bundle, vk, sighash, is_zsa),
         None => {
