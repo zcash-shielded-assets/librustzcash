@@ -1336,7 +1336,11 @@ impl Transaction {
             lock_time,
             expiry_height,
             #[cfg(feature = "zip-233")]
-            zip233_amount: Self::read_zip233_amount(&mut reader)?,
+            zip233_amount: if consensus_branch_id == BranchId::Nu7 {
+                Self::read_zip233_amount(&mut reader)?
+            } else {
+                Zatoshis::ZERO
+            },
         })
     }
 
@@ -1521,7 +1525,9 @@ impl Transaction {
         writer.write_u32_le(u32::from(self.expiry_height))?;
 
         #[cfg(feature = "zip-233")]
-        writer.write_u64_le(self.zip233_amount.into())?;
+        if self.consensus_branch_id == BranchId::Nu7 {
+            writer.write_u64_le(self.zip233_amount.into())?;
+        }
         Ok(())
     }
 
@@ -1728,7 +1734,11 @@ pub mod testing {
                 consensus_branch_id,
                 lock_time,
                 expiry_height: expiry_height.into(),
-                zip233_amount: Zatoshis::from_u64(zip233_amount).unwrap(),
+                zip233_amount: if consensus_branch_id == BranchId::Nu7 {
+                    Zatoshis::from_u64(zip233_amount).unwrap()
+                } else {
+                    Zatoshis::ZERO
+                },
                 transparent_bundle,
                 sprout_bundle: None,
                 sapling_bundle,

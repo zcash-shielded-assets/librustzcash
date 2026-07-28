@@ -181,6 +181,34 @@ fn v6_empty_orchard_txid_uses_v6_orchard_personalization() {
     assert_eq!(&tx.txid().as_ref()[..], expected.as_bytes());
 }
 
+#[cfg(all(feature = "zip-233", not(zcash_unstable = "nu7")))]
+#[test]
+fn ironwood_v6_header_omits_zip233_amount() {
+    let tx = TransactionData::from_parts_v6(
+        BranchId::Nu6_3,
+        0,
+        1u32.into(),
+        Zatoshis::const_from_u64(0x0001_0203_0405_0607),
+        None,
+        None,
+        None,
+        None,
+    )
+    .freeze()
+    .unwrap();
+
+    let mut tx_bytes = vec![];
+    tx.write(&mut tx_bytes).unwrap();
+
+    // The V6 header ends after nExpiryHeight at byte 20. The next byte is the
+    // transparent input count, not the first byte of the ZSA-only ZIP-233 amount.
+    assert_eq!(tx_bytes.len(), 26);
+    assert_eq!(&tx_bytes[20..], &[0; 6]);
+
+    let parsed = Transaction::read(&tx_bytes[..], BranchId::Nu6_3).unwrap();
+    assert_eq!(parsed.zip233_amount(), Zatoshis::ZERO);
+}
+
 #[cfg(all(test, not(zcash_unstable = "nu7")))]
 #[test]
 fn v6_branch_reconstruction_preserves_ironwood_bundle() {
