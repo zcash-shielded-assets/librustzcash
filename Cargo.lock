@@ -2063,13 +2063,13 @@ dependencies = [
 [[package]]
 name = "halo2_gadgets"
 version = "0.5.0"
-source = "git+https://github.com/zcash-shielded-assets/halo2?rev=d687ce0e3e913549cab370ec66765e6d59d4612f#d687ce0e3e913549cab370ec66765e6d59d4612f"
+source = "git+https://github.com/zcash-shielded-assets/halo2?rev=dcdbd1df2b30fd8d709c1a7c4ad9c4e091789d00#dcdbd1df2b30fd8d709c1a7c4ad9c4e091789d00"
 dependencies = [
  "arrayvec",
  "bitvec",
  "ff",
  "group",
- "halo2_poseidon 0.1.0 (git+https://github.com/zcash-shielded-assets/halo2?rev=d687ce0e3e913549cab370ec66765e6d59d4612f)",
+ "halo2_poseidon 0.1.0 (git+https://github.com/zcash-shielded-assets/halo2?rev=dcdbd1df2b30fd8d709c1a7c4ad9c4e091789d00)",
  "halo2_proofs",
  "lazy_static",
  "pasta_curves",
@@ -2100,7 +2100,7 @@ dependencies = [
 [[package]]
 name = "halo2_poseidon"
 version = "0.1.0"
-source = "git+https://github.com/zcash-shielded-assets/halo2?rev=d687ce0e3e913549cab370ec66765e6d59d4612f#d687ce0e3e913549cab370ec66765e6d59d4612f"
+source = "git+https://github.com/zcash-shielded-assets/halo2?rev=dcdbd1df2b30fd8d709c1a7c4ad9c4e091789d00#dcdbd1df2b30fd8d709c1a7c4ad9c4e091789d00"
 dependencies = [
  "bitvec",
  "ff",
@@ -2110,8 +2110,8 @@ dependencies = [
 
 [[package]]
 name = "halo2_proofs"
-version = "0.3.2"
-source = "git+https://github.com/zcash-shielded-assets/halo2?rev=d687ce0e3e913549cab370ec66765e6d59d4612f#d687ce0e3e913549cab370ec66765e6d59d4612f"
+version = "0.3.4"
+source = "git+https://github.com/zcash-shielded-assets/halo2?rev=dcdbd1df2b30fd8d709c1a7c4ad9c4e091789d00#dcdbd1df2b30fd8d709c1a7c4ad9c4e091789d00"
 dependencies = [
  "blake2b_simd",
  "ff",
@@ -3076,8 +3076,8 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "orchard"
-version = "0.15.0-pre.1"
-source = "git+https://github.com/zcash-shielded-assets/orchard.git?rev=9f4d3561f142c5698cb25b674e89af0592e15ffd#9f4d3561f142c5698cb25b674e89af0592e15ffd"
+version = "0.15.4"
+source = "git+https://github.com/zcash-shielded-assets/orchard.git?rev=ab3e0f4b94d6c9be272def9840eb6a55b996e3c2#ab3e0f4b94d6c9be272def9840eb6a55b996e3c2"
 dependencies = [
  "aes",
  "bitvec",
@@ -7289,8 +7289,8 @@ dependencies = [
 
 [[package]]
 name = "zcash_note_encryption"
-version = "0.4.1"
-source = "git+https://github.com/zcash-shielded-assets/zcash_note_encryption?rev=57d048381d376f71ce6ba753d7876ef04b6e57cb#57d048381d376f71ce6ba753d7876ef04b6e57cb"
+version = "0.4.2"
+source = "git+https://github.com/zcash-shielded-assets/zcash_note_encryption?rev=bc7a9370e1a7253cf496f24aa0bd4d0e49c3977e#bc7a9370e1a7253cf496f24aa0bd4d0e49c3977e"
 dependencies = [
  "chacha20",
  "chacha20poly1305",

@@ -75,7 +75,7 @@ redjubjub = { version = "0.8", default-features = false }
 sapling = { package = "sapling-crypto", version = "0.7", default-features = false }
 
 # - Orchard
-orchard = { git = "https://github.com/zcash-shielded-assets/orchard.git", rev = "9f4d3561f142c5698cb25b674e89af0592e15ffd", default-features = false }
+orchard = { git = "https://github.com/zcash-shielded-assets/orchard.git", rev = "ab3e0f4b94d6c9be272def9840eb6a55b996e3c2", default-features = false }
 pasta_curves = "0.5"
 
 # - Transparent
@@ -240,7 +240,7 @@ unexpected_cfgs = { level = "warn", check-cfg = [
 
 [patch.crates-io]
 # orchard patched via workspace dependency above
-zcash_note_encryption = { git = "https://github.com/zcash-shielded-assets/zcash_note_encryption", rev = "57d048381d376f71ce6ba753d7876ef04b6e57cb" }
+zcash_note_encryption = { git = "https://github.com/zcash-shielded-assets/zcash_note_encryption", rev = "bc7a9370e1a7253cf496f24aa0bd4d0e49c3977e" }
 sapling = { package = "sapling-crypto", git = "https://github.com/QED-it/sapling-crypto", rev = "869b1701aa876905f2b8e979a9cae38fe41d08ee" }
 zcash_spec = { git = "https://github.com/zcash-shielded-assets/zcash_spec", rev = "d5e84264d2ad0646b587a837f4e2424ca64d3a05" }
 sinsemilla = { git = "https://github.com/zcash/sinsemilla", rev = "aabb707e862bc3d7b803c77d14e5a771bcee3e8c" }
