@@ -49,7 +49,7 @@ impl super::Input {
     where
         F: FnOnce(SignableInput) -> [u8; 32],
     {
-        let pubkey = sk.public_key(secp).serialize();
+        let pubkey = sk.public_key().serialize();
         let p2pkh_addr = TransparentAddress::from_pubkey_bytes(&pubkey);
 
         // For P2PKH, `script_code` is always the same as `script_pubkey`.
@@ -91,7 +91,7 @@ impl super::Input {
         });
 
         let msg = secp256k1::Message::from_digest(sighash);
-        let sig = secp.sign_ecdsa(&msg, sk);
+        let sig = secp.sign_ecdsa(msg, sk);
 
         // Signature has to have the SighashType appended to it.
         let mut sig_bytes: Vec<u8> = sig.serialize_der()[..].to_vec();
@@ -173,7 +173,7 @@ impl super::Input {
             let pk = secp256k1::PublicKey::from_slice(&pubkey)
                 .map_err(|_| SignerError::UnsupportedPubkey)?;
 
-            if secp.verify_ecdsa(&msg, &sig, &pk).is_ok() {
+            if secp.verify_ecdsa(msg, &sig, &pk).is_ok() {
                 // Signature has to have the SighashType appended to it.
                 let mut sig_bytes: Vec<u8> = sig.serialize_der()[..].to_vec();
                 sig_bytes.extend([self.sighash_type.encode()]);

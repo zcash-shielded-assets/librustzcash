@@ -144,7 +144,7 @@ impl TransparentSigningSet {
     /// Returns the corresponding pubkey.
     #[cfg(feature = "transparent-inputs")]
     pub fn add_key(&mut self, sk: secp256k1::SecretKey) -> secp256k1::PublicKey {
-        let pubkey = secp256k1::PublicKey::from_secret_key(&self.secp, &sk);
+        let pubkey = secp256k1::PublicKey::from_secret_key(&sk);
         // Cache the pubkey for ease of matching later.
         self.keys.push((sk, pubkey));
         pubkey
@@ -643,7 +643,7 @@ impl Bundle<Unauthorized> {
                         });
 
                         let msg = secp256k1::Message::from_digest(sighash);
-                        let sig = signing_set.secp.sign_ecdsa(&msg, sk);
+                        let sig = signing_set.secp.sign_ecdsa(msg, sk);
 
                         Ok(construct_script_sig(&sig, pubkey))
                     }
@@ -682,7 +682,7 @@ impl Bundle<Unauthorized> {
                                         .iter()
                                         .find(|(_, pk)| pk.serialize() == pubkey_bytes)
                                     {
-                                        let sig = signing_set.secp.sign_ecdsa(&msg, sk);
+                                        let sig = signing_set.secp.sign_ecdsa(msg, sk);
                                         let mut sig_bytes: Vec<u8> = sig.serialize_der().to_vec();
                                         sig_bytes.push(SIGHASH_ALL);
                                         script_sig.push(
@@ -823,7 +823,7 @@ impl TransparentSignatureContext<'_, secp256k1::VerifyOnly> {
             if let SpendInfo::P2pkh { pubkey } = &input_info.spend_info
                 && self
                     .secp_ctx
-                    .verify_ecdsa(&sighash_msg, signature, pubkey)
+                    .verify_ecdsa(sighash_msg, signature, pubkey)
                     .is_ok()
             {
                 if matched_input_idx.is_some() {
