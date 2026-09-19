@@ -26,12 +26,19 @@ extern crate std;
 pub mod build;
 pub mod denomination;
 pub mod engine;
+#[cfg(feature = "orchard")]
+pub mod pczt_spends;
+#[cfg(feature = "orchard")]
+pub mod pczt_txid;
 pub mod preparation;
+pub mod satisfiability;
 pub mod scheduling;
 pub mod signing_rounds;
 pub mod state;
 #[cfg(feature = "wallet")]
 pub mod wallet;
+#[cfg(feature = "orchard")]
+pub mod zip318_shape;
 
 #[cfg(any(test, feature = "test-dependencies"))]
 pub mod testing;

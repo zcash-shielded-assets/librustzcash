@@ -10,6 +10,204 @@ workspace.
 
 ## [Unreleased]
 
+## [0.24.0-rc.7] - 2026-08-03
+
+### Added
+- `zcash_client_backend::data_api::zip318` (requires the `orchard` feature), which
+  assembles ZIP 318 classification evidence from a decrypted transaction and
+  classifies it. What it can observe is weaker than what the same predicate sees on
+  a transaction the wallet is building, because on chain a zero-valued padding dummy
+  and an unrelated party's output are equally undecryptable; the weaker reading
+  admits more, never less.
+- `zcash_client_backend::data_api::ll::LowLevelWalletWrite::put_zip318_classification`,
+  a required method, called by `store_decrypted_tx` under the `orchard` feature. A
+  store that has not been given a classification for a transaction must report it as
+  unclassified, never as `Nonconforming`.
+- `zcash_client_backend::data_api::testing::TestState::generate_and_scan_empty_blocks`
+- `zcash_client_backend::data_api::testing::TestState::create_account_from_test_seed`
+- `zcash_client_backend::data_api::testing::TestState::orchard_anchor_at` (requires
+  the `orchard` feature)
+- `zcash_client_backend::data_api::ll::wallet::batch_ensure_heights`, the complete set
+  of checkpoint heights a batch of scanned blocks must ensure: cross-pool alignment
+  unioned with the heights an `AnchorRetention` policy retains within the batch's
+  range. `put_blocks` now composes its ensure sets through it; behaviour is unchanged.
+  A consumer maintaining its note commitment trees by other means must compose both
+  obligations. Scanning checkpoints a block only at its last note commitment, so a
+  retention-grid boundary landing on a block with no shielded output in any pool is
+  not checkpointed by cross-pool alignment; marking such a boundary without ensuring
+  it leaves anything pre-signed against that height (for example a ZIP 318
+  pool-migration transfer) permanently unprovable.
+
+### Fixed
+- `zcash_client_backend::data_api::wallet::extract_and_store_transaction_from_pczt`
+  now records the transaction's Ironwood outputs in the stored `SentTransaction`.
+  Previously every Ironwood output was silently omitted: for a post-NU6.3 PCZT
+  delivering a payment through the Ironwood pool, the external recipient's
+  address and decrypted memo were never persisted (and are not otherwise
+  recoverable), and wallet-internal Ironwood outputs were invisible to the
+  wallet until the transaction was mined and scanned. The function also now
+  tags every shielded sent output with its note commitment tree, as the
+  transaction-builder spend path does.
+- `zcash_client_backend::data_api::wallet::redact_pczt_for_batch_signer` now
+  omits existing Orchard and Ironwood spend authorization signatures from the
+  batch signing request. They remain present in the caller's authoritative
+  PCZT, so the response only contains new signatures. This restores
+  compatibility with batch Signers that reject pre-signed requests.
+
+## [0.24.0-rc.6] - 2026-07-29
+
+### Added
+- `zcash_client_backend::data_api::anchor_retention::AnchorRetention::retained_in_range`
+- `zcash_client_backend::data_api::wallet::input_selection::NoteSelection`
+- `zcash_client_backend::data_api::wallet::input_selection::SpendPolicy::{with_note_selection, note_selection}`
+- `zcash_client_backend::data_api::InputSource::select_single_spendable_note`, with a
+  best-effort default implementation
+- `zcash_client_backend::data_api::ReceivedNotes::{is_empty, into_single_covering}`
+- `zcash_client_backend::fees::DummyOutputCounts`, the number of dummy outputs in
+  each shielded value pool.
+- `zcash_client_backend::fees::TransactionBalance::{with_dummy_outputs, dummy_outputs}`
+- `zcash_client_backend::proto::proposal::DummyOutputs`, so that the dummy-output
+  counts a fee was computed against survive serialization. A proposal serialized
+  before this field existed parses back with no counts recorded.
+
+### Changed
+- `zcash_client_backend::data_api::wallet::propose_transfer` now funds a canonical
+  ZIP 318 crossing attempt from the single oldest Orchard note that covers the
+  payment and its fee, falling back to ordinary accumulation when no such note
+  exists. Payments of canonical denominations that previously lost the canonical
+  shape to multi-note funding now take it whenever a single covering note exists.
+- `zcash_client_backend::data_api::wallet::propose_transfer` abandons the canonical
+  ZIP 318 crossing attempt when no anchor is computable at the bucketed boundary
+  height (per `InputSource::anchor_computable`), proposing an ordinary crossing
+  instead of a canonical proposal whose build would fail with
+  `ProposalError::AnchorNotFound`.
+- `zcash_client_backend::data_api::InputSource` has added method `anchor_computable`
+
+### Removed
+- `zcash_client_backend::fees::TransactionBalance::{with_ironwood_bundle_padding, ironwood_bundle_padding}`.
+  A `ChangeStrategy` records the exact dummy-output count of every shielded bundle it
+  costed, via `with_dummy_outputs`, instead of an Ironwood-specific padding policy;
+  `zcash_client_backend::proposal::Step::ironwood_bundle_padding` derives the builder's
+  padding from those counts and the step's transaction shape.
+
+### Fixed
+- `zcash_client_backend::data_api::ll::wallet::put_blocks` now creates (and retains) a
+  checkpoint at every anchor-retention grid height in the scanned range, including
+  heights whose blocks contain no note commitments in any pool. Previously such
+  boundaries were never checkpointed, and a ZIP 318 crossing anchored to one would
+  fail with `ProposalError::AnchorNotFound`.
+
+## [0.24.0-rc.5] - 2026-07-28
+
+### Added
+- `zcash_client_backend::proposal::Step::{is_canonical_crossing, ironwood_bundle_padding}`
+- `zcash_client_backend::fees::canonical_crossing_fee`
+- `zcash_client_backend::fees::TransactionBalance::{with_ironwood_bundle_padding, ironwood_bundle_padding}`,
+  recording the Ironwood bundle padding a fee was computed for. A `ChangeStrategy` that costs an
+  Ironwood bundle as unpadded must record it, or the builder will not reproduce the action count
+  the fee was charged against.
+- `zcash_client_backend::data_api::anchor_retention::PoolMigrationParams`, the ZIP 318
+  parameters in force for a wallet: the specified values, with the anchor bucket grid
+  taken from `WalletRead::anchor_retention_interval`.
+- `zcash_client_backend::data_api::WalletRead::pool_migration_params`, defaulting to
+  the above.
+- `zcash_client_backend::data_api::wallet::ConfirmationsPolicy::bucketed`
+- `zcash_client_backend::data_api::error::Error::ExpiryHeightConflictsWithCanonicalCrossing`
+- `impl Debug for zcash_client_backend::data_api::ll::wallet::PutBlocksError`
+- `zcash_client_backend::data_api::BirthdayError` now implements `Debug`,
+  `Display` and `std::error::Error`.
+- `zcash_client_backend::tor::Timeouts`
+- `zcash_client_backend::tor::Client::create_with_timeouts`
+- `zcash_client_backend::tor::http::TimeoutPhase`
+- `zcash_client_backend::tor::http::HttpError::Timeout`
+
+### Changed
+- Transaction-construction helpers exposed by `test-dependencies` use the
+  Sapling mock provers. Tests that need cryptographically valid proofs must call
+  the production transaction-construction APIs with a real prover.
+- `zcash_client_backend::data_api::OutputLockStore::get_locked_outputs` is no longer
+  gated behind `test-dependencies`; every implementor must now provide it
+  unconditionally.
+- A payment across the Orchard turnstile whose value is a canonical ZIP 318
+  denomination (a `{1, 2, 5} * 10^k` amount between 0.01 ZEC and 10,000 ZEC) is now
+  proposed against an anchor on the wallet's ZIP 318 bucket grid, funded from a single
+  Orchard note, given the ZIP 318 rolling expiry height, and built with one unpadded
+  Ironwood action instead of two; it therefore pays one fewer ZIP 317 marginal-fee
+  action and requires up to two bucket intervals of additional confirmations on its
+  inputs. When the wallet cannot fund it that way, an ordinary transaction is proposed
+  instead. Supplying an explicit `expiry_height` for such a transaction, to either
+  `create_proposed_transactions` or `create_pczt_from_proposal`, is rejected with
+  `Error::ExpiryHeightConflictsWithCanonicalCrossing`.
+- `zcash_client_backend::fees::ChangeStrategy::compute_balance` takes two additional
+  arguments after `target_height`: `anchor_height: BlockHeight` and
+  `zip318: &PoolMigrationParams`. The same applies to
+  `InputSelector::{propose_transaction, propose_shielding}`. Pass the anchor height the
+  transaction will be proved against, and `WalletRead::pool_migration_params`.
+- `create_pczt_from_proposal`'s `orchard_pool_padding` argument now selects the
+  padding for the Orchard bundle only; the Ironwood bundle's padding is derived from
+  the proposal. Pass `BundlePadding::DEFAULT`.
+- `zcash_client_backend::proposal::Step::{orchard_action_count, ironwood_action_count}`
+  take a `zcash_primitives::transaction::builder::BundlePadding` in place of an
+  `orchard::builder::BundleType`; `BundleType::Coinbase` is no longer representable.
+  Replace `BundleType::DEFAULT` with `BundlePadding::DEFAULT`,
+  `BundleType::UNPADDED` with `BundlePadding::UNPADDED`, and a
+  `BundleType::Transactional { .. }` literal with the identically-fielded
+  `BundlePadding { .. }`.
+- `zcash_client_backend::data_api::anchor_retention::AnchorRetentionInterval` is
+  now a re-export of `zcash_protocol::zip318::AnchorBucketInterval`. Its API and
+  behaviour are unchanged, but it is no longer distinct from `zcash_pool_migration`'s
+  bucket interval, so the `From` conversion between them is gone; remove any `.into()`
+  at that boundary. `AnchorRetentionInterval::custom` is no longer gated behind
+  `unstable`, and `AnchorRetentionInterval::from_stored_block_count` is removed — use
+  `custom`.
+- Every public error enum in this crate is now `#[non_exhaustive]`
+  so that future variants can be added without a breaking release. A
+  `match` over any of them must now include a wildcard arm:
+  `data_api::chain::Error`, `data_api::error::{Error, RewindError, PcztError,
+  LockError}`, `data_api::ll::wallet::PutBlocksError`,
+  `data_api::wallet::input_selection::{InputSelectorError,
+  GreedyInputSelectorError}`, `data_api::BirthdayError`, `fees::ChangeError`,
+  `proto::{CompactFormatError, ProposalDecodingError}`, `scanning::ScanError`,
+  `sync::Error`, `sync::decryptor::TryQueueError`, `tor::Error`,
+  `tor::grpc::GrpcError`, and `tor::http::HttpError`.
+- `zcash_client_backend::data_api::ll::LowLevelWalletWrite` has added method
+  `queue_tx_status`, which records durable status-observation intent for
+  transactions whose mined status cannot be learned by compact-block scanning.
+
+### Removed
+- `zcash_client_backend::fees::zip317::{SingleOutputChangeStrategy, MultiOutputChangeStrategy}::with_unpadded_orchard_pool_bundles`.
+  The Orchard bundle is always padded to the default action floor, and the Ironwood
+  bundle's padding is derived from the transaction's shape.
+
+### Fixed
+- `data_api::ll::wallet::store_decrypted_tx` now distinguishes a wallet-observable
+  shielded spend or output from mere shielded bundle presence when deciding
+  whether txid-based status observation is required.
+- The Tor HTTP and gRPC transports now reject a URL whose scheme is neither
+  `http` nor `https` (for example `ftp` or `ws`) with `tor::http::HttpError::NonHttpUrl`.
+  Previously such a URL was silently treated as plaintext HTTP, contradicting the
+  documented "only HTTP or HTTPS URLs are supported" contract. A URL with no scheme
+  at all was, and remains, rejected the same way.
+- `zcash_client_backend::data_api::wallet::redact_pczt_for_batch_signer` no
+  longer removes existing spend authorization signatures. It previously
+  stripped the signatures of the pre-signed protocol padding dummies while
+  also removing their randomizers and (via the compact signer view) their
+  dummy signing keys, leaving actions that neither the batch Signer nor the
+  wallet could authorize. Every action in the returned view is now either
+  already authorized or still authorizable. A batch Signer's response
+  consequently carries the retained signatures back alongside the new ones;
+  re-applying them to the authoritative PCZT is a no-op.
+- The Tor HTTP and gRPC transports now bound how long each network operation may
+  take. Previously a server that accepted a connection and then never responded
+  would leave the request pending indefinitely, and could thereby stall any caller
+  that aggregates several servers (such as `tor::Client::get_latest_zec_to_usd_rate`).
+  `tor::Client::create` applies `tor::Timeouts::default`; use
+  `tor::Client::create_with_timeouts` if those deadlines are too aggressive for your
+  expected circuit latency. HTTP requests that exceed a deadline now fail with
+  `tor::http::HttpError::Timeout` instead of hanging.
+
+## [0.24.0-rc.4] - 2026-07-26
+
 ### Changed
 - `zcash_client_backend::proposal::ProposalError` is now `#[non_exhaustive]`
   and has added variant `OrchardPoolPayment`.
@@ -118,6 +316,19 @@ workspace.
   back through this method to decide which heights its transfers may anchor to.
 - `zcash_client_backend::data_api::testing::TestBuilder::with_anchor_retention_interval`
 
+- `zcash_client_backend::data_api::locking`, a new module that is the single
+  home for the note-locking vocabulary: `LockOwner`, `LockError`,
+  `LockRequest`, `unlock_proposal_inputs`, `LockedInputPolicy`, and
+  `LockFilter` now live here, together with the module-level documentation of
+  the locking semantics. All previous paths (`wallet::LockOwner`,
+  `data_api::error::LockError`, `data_api::wallet::{LockRequest,
+  unlock_proposal_inputs}`, and
+  `data_api::wallet::input_selection::{LockedInputPolicy, LockFilter}`) are
+  preserved as re-exports.
+- `zcash_client_backend::data_api::locking::OutputLockStore` (re-exported as
+  `zcash_client_backend::data_api::OutputLockStore`), the extracted storage
+  contract for output locks, with `AccountId` and `Error` associated types.
+
 ### Changed
 - Migrated to `zcash_primitives 0.30.0`, `zcash_transparent 0.10.0`,
   `zcash_proofs 0.30.0`, `pczt 0.8.0`, `zcash_keys 0.16.0`.
@@ -134,6 +345,21 @@ workspace.
   argument; pass `None` to keep the default grid.
 - `zcash_client_backend::data_api::testing::pool::anchor_checkpoints_retained_across_deep_scan`
   takes the `AnchorRetentionInterval` to exercise as an additional argument.
+- The output-lock storage methods have been extracted from `WalletWrite` into
+  the new `OutputLockStore` trait (a breaking change relative to the locking
+  API introduced earlier in this unreleased cycle):
+  - `WalletWrite` now has
+    `OutputLockStore<AccountId = <Self as WalletRead>::AccountId,
+    Error = <Self as WalletRead>::Error>` as a supertrait and no longer
+    declares `lock_outputs`, `unlock_output`, or `clear_locked_outputs`;
+    implementors must now provide these via an `OutputLockStore` impl.
+  - `WalletTest::get_locked_outputs` has moved to `OutputLockStore` (still
+    gated on the `test-dependencies` feature).
+  - Because `WalletWrite` now inherits same-named associated types from two
+    supertraits, generic code bounded on `WalletWrite` must qualify
+    `AccountId` and `Error` (e.g. `<DbT as WalletRead>::Error`), and bounds of
+    the form `WalletWrite<Error = E, AccountId = A>` should become
+    `WalletRead<Error = E, AccountId = A> + WalletWrite`.
 - `zcash_client_backend::data_api::wallet::create_proposed_transactions` now
   takes an `expiry_height: Option<BlockHeight>` parameter, mirroring the
   one already accepted by `create_pczt_from_proposal`. This lets callers

@@ -40,16 +40,18 @@ pub mod issuer;
 
 #[cfg(test)]
 mod tests {
+    #[cfg(any(feature = "io-finalizer", feature = "tx-extractor"))]
+    use {crate::roles::creator::Creator, zcash_protocol::consensus::BranchId};
+
+    #[cfg(feature = "io-finalizer")]
+    use crate::roles::io_finalizer::{self, IoFinalizer};
+
+    #[cfg(feature = "tx-extractor")]
+    use crate::roles::tx_extractor::{self, TransactionExtractor};
+
     #[cfg(feature = "tx-extractor")]
     #[test]
     fn extract_fails_on_empty() {
-        use zcash_protocol::consensus::BranchId;
-
-        use crate::roles::{
-            creator::Creator,
-            tx_extractor::{self, TransactionExtractor},
-        };
-
         let pczt = Creator::new(
             BranchId::Nu6.into(),
             10_000_000,
@@ -74,13 +76,6 @@ mod tests {
     #[cfg(feature = "io-finalizer")]
     #[test]
     fn io_finalizer_fails_on_empty() {
-        use zcash_protocol::consensus::BranchId;
-
-        use crate::roles::{
-            creator::Creator,
-            io_finalizer::{self, IoFinalizer},
-        };
-
         let pczt = Creator::new(
             BranchId::Nu6.into(),
             10_000_000,

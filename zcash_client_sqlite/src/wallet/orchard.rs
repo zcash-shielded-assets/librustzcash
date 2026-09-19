@@ -21,6 +21,7 @@ use zcash_primitives::transaction::TxId;
 use zcash_protocol::{
     PoolType, ShieldedPool,
     consensus::{self, BlockHeight},
+    value::Zatoshis,
 };
 use zip32::Scope;
 
@@ -236,6 +237,56 @@ pub(crate) fn select_spendable_orchard_notes<P: consensus::Parameters>(
         confirmations_policy,
         exclude,
         ShieldedPool::Orchard,
+        to_received_note,
+        lock_filter,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn select_single_spendable_orchard_note<P: consensus::Parameters>(
+    conn: &Connection,
+    params: &P,
+    account: AccountUuid,
+    value: Zatoshis,
+    target_height: TargetHeight,
+    confirmations_policy: ConfirmationsPolicy,
+    exclude: &[ReceivedNoteId],
+    lock_filter: LockFilter<'_>,
+) -> Result<Option<ReceivedNote<ReceivedNoteId, Note>>, SqliteClientError> {
+    super::common::select_single_spendable_note(
+        conn,
+        params,
+        account,
+        value,
+        target_height,
+        confirmations_policy,
+        exclude,
+        ShieldedPool::Orchard,
+        to_received_note,
+        lock_filter,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn select_single_spendable_ironwood_note<P: consensus::Parameters>(
+    conn: &Connection,
+    params: &P,
+    account: AccountUuid,
+    value: Zatoshis,
+    target_height: TargetHeight,
+    confirmations_policy: ConfirmationsPolicy,
+    exclude: &[ReceivedNoteId],
+    lock_filter: LockFilter<'_>,
+) -> Result<Option<ReceivedNote<ReceivedNoteId, Note>>, SqliteClientError> {
+    super::common::select_single_spendable_note(
+        conn,
+        params,
+        account,
+        value,
+        target_height,
+        confirmations_policy,
+        exclude,
+        ShieldedPool::Ironwood,
         to_received_note,
         lock_filter,
     )
@@ -679,11 +730,45 @@ fn mark_note_spent(
 #[cfg(test)]
 pub(crate) mod tests {
 
-    use zcash_client_backend::data_api::testing::{
-        orchard::OrchardPoolTester, sapling::SaplingPoolTester,
+    use zcash_client_backend::{
+        DecryptedOutput, TransferType,
+        data_api::testing::{TestBuilder, orchard::OrchardPoolTester, sapling::SaplingPoolTester},
     };
 
-    use crate::testing::{self};
+    use crate::{
+        TxRef,
+        testing::{self, db::TestDbFactory},
+    };
+    use orchard::{
+        ValuePool,
+        keys::{FullViewingKey, SpendingKey},
+        note::{Note, NoteVersion, RandomSeed, Rho},
+        value::NoteValue,
+    };
+    use rusqlite::named_params;
+    use zcash_primitives::block::BlockHash;
+    use zcash_protocol::{ShieldedPool, memo::MemoBytes};
+    #[cfg(feature = "orchard")]
+    use {
+        crate::testing::BlockCache,
+        std::{collections::HashMap, convert::Infallible},
+        zcash_client_backend::{
+            data_api::{
+                Account, WalletRead,
+                testing::{
+                    AddressType, IronwoodFvk, pool::ShieldedPoolTester,
+                    single_output_change_strategy,
+                },
+                wallet::{ConfirmationsPolicy, input_selection::GreedyInputSelector},
+            },
+            decrypt_transaction,
+            fees::StandardFeeRule,
+            wallet::OvkPolicy,
+        },
+        zcash_keys::address::Address,
+        zcash_protocol::{consensus::BlockHeight, local_consensus::LocalNetwork, value::Zatoshis},
+        zip321::{Payment, TransactionRequest},
+    };
 
     #[test]
     fn send_single_step_proposed_transfer() {
@@ -810,69 +895,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn spend_fails_on_locked_notes() {
-        testing::pool::spend_fails_on_locked_notes::<OrchardPoolTester>()
-    }
-
-    #[test]
-    fn explicit_note_locking() {
-        testing::pool::explicit_note_locking::<OrchardPoolTester>()
-    }
-
-    #[test]
-    fn note_locking_height_boundary() {
-        testing::pool::note_locking_height_boundary::<OrchardPoolTester>()
-    }
-
-    #[test]
-    fn clear_locked_outputs() {
-        testing::pool::clear_locked_outputs::<OrchardPoolTester>()
-    }
-
-    #[test]
-    fn proposal_level_note_locking() {
-        testing::pool::proposal_level_note_locking::<OrchardPoolTester>()
-    }
-
-    #[test]
-    fn locked_proposal_proto_roundtrip() {
-        testing::pool::locked_proposal_proto_roundtrip::<OrchardPoolTester>()
-    }
-
-    #[test]
-    fn lock_expiry_restores_spendability() {
-        testing::pool::lock_expiry_restores_spendability::<OrchardPoolTester>()
-    }
-
-    #[test]
-    fn lock_conflict_and_batch_atomicity() {
-        testing::pool::lock_conflict_and_batch_atomicity::<OrchardPoolTester>()
-    }
-
-    #[test]
-    fn unlock_proposal_inputs_releases_locks() {
-        testing::pool::unlock_proposal_inputs_releases_locks::<OrchardPoolTester>()
-    }
-
-    #[test]
-    fn spend_policy_locked_input_policy_reaches_selection() {
-        testing::pool::spend_policy_locked_input_policy_reaches_selection::<OrchardPoolTester>()
-    }
-
-    proptest::proptest! {
-        // Each case builds a fresh wallet and replays an operation sequence, so keep the
-        // case count moderate; the sequences themselves explore the expiry boundaries.
-        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(12))]
-
-        #[test]
-        fn note_locking_model(
-            ops in zcash_client_backend::data_api::testing::pool::arb_lock_ops(3, 10)
-        ) {
-            testing::pool::check_note_locking_model::<OrchardPoolTester>(&ops)
-        }
-    }
-
-    #[test]
     fn ovk_policy_prevents_recovery_from_chain() {
         testing::pool::ovk_policy_prevents_recovery_from_chain::<OrchardPoolTester>()
     }
@@ -932,13 +954,53 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn empty_boundary_blocks_are_checkpointed_and_retained() {
+        testing::pool::empty_boundary_blocks_are_checkpointed_and_retained::<OrchardPoolTester>()
+    }
+
+    #[test]
     fn scan_cached_blocks_detects_spends_out_of_order() {
         testing::pool::scan_cached_blocks_detects_spends_out_of_order::<OrchardPoolTester>()
     }
 
     #[test]
+    fn oldest_note_is_selected_first() {
+        testing::pool::oldest_note_is_selected_first::<OrchardPoolTester>()
+    }
+
+    #[test]
     fn metadata_queries_exclude_unwanted_notes() {
         testing::pool::metadata_queries_exclude_unwanted_notes::<OrchardPoolTester>()
+    }
+
+    #[test]
+    fn canonical_crossing_is_bucketed_and_unpadded() {
+        testing::pool::canonical_crossing_is_bucketed_and_unpadded()
+    }
+
+    #[test]
+    fn canonical_crossing_builds_at_empty_boundary_block() {
+        testing::pool::canonical_crossing_builds_at_empty_boundary_block()
+    }
+
+    #[test]
+    fn canonical_crossing_prefers_single_note() {
+        testing::pool::canonical_crossing_prefers_single_note()
+    }
+
+    #[test]
+    fn canonical_crossing_abandoned_without_anchor_checkpoint() {
+        testing::pool::canonical_crossing_abandoned_without_anchor_checkpoint()
+    }
+
+    #[test]
+    fn multi_note_crossing_is_not_bucketed() {
+        testing::pool::multi_note_crossing_is_not_bucketed()
+    }
+
+    #[test]
+    fn self_migration_keeps_spending_orchard() {
+        testing::pool::self_migration_keeps_spending_orchard()
     }
 
     #[test]
@@ -1084,28 +1146,22 @@ pub(crate) mod tests {
         testing::pool::propose_v5_payment_to_orchard_receiver_is_rejected();
     }
 
+    #[test]
+    fn orchard_to_ironwood_payment_reports_net_value_delta() {
+        testing::pool::orchard_to_ironwood_payment_reports_net_value_delta();
+    }
+
+    #[test]
+    fn orchard_to_ironwood_self_migration_reports_fee_only_delta() {
+        testing::pool::orchard_to_ironwood_self_migration_reports_fee_only_delta();
+    }
+
     /// `put_received_note` records a note in the received-notes table chosen by the caller,
     /// preserving the note's plaintext version in the `note_version` column. An Orchard-pool note
     /// and an Ironwood-pool note sharing an action index may both be recorded in their respective
     /// tables.
     #[test]
     fn put_received_note_records_to_caller_selected_table() {
-        use orchard::{
-            ValuePool,
-            keys::{FullViewingKey, SpendingKey},
-            note::{Note, NoteVersion, RandomSeed, Rho},
-            value::NoteValue,
-        };
-        use rusqlite::named_params;
-        use zcash_client_backend::{
-            DecryptedOutput, TransferType,
-            data_api::{Account as _, testing::TestBuilder},
-        };
-        use zcash_primitives::block::BlockHash;
-        use zcash_protocol::{ShieldedPool, memo::MemoBytes};
-
-        use crate::{TxRef, testing::db::TestDbFactory};
-
         let mut st = TestBuilder::new()
             .with_data_store_factory(TestDbFactory::default())
             .with_account_from_sapling_activation(BlockHash([0; 32]))
@@ -1198,18 +1254,6 @@ pub(crate) mod tests {
     #[test]
     #[cfg(feature = "orchard")]
     fn scan_block_stores_received_ironwood_note() {
-        use zcash_client_backend::data_api::{
-            Account,
-            testing::{
-                AddressType, IronwoodFvk, TestBuilder, orchard::OrchardPoolTester,
-                pool::ShieldedPoolTester,
-            },
-        };
-        use zcash_primitives::block::BlockHash;
-        use zcash_protocol::value::Zatoshis;
-
-        use crate::testing::{BlockCache, db::TestDbFactory};
-
         let mut st = TestBuilder::new()
             .with_data_store_factory(TestDbFactory::default())
             .with_block_cache(BlockCache::new())
@@ -1269,30 +1313,6 @@ pub(crate) mod tests {
     #[test]
     #[cfg(feature = "orchard")]
     fn spend_received_ironwood_note() {
-        use std::convert::Infallible;
-
-        use zcash_client_backend::{
-            data_api::{
-                Account, WalletRead,
-                testing::{
-                    AddressType, IronwoodFvk, TestBuilder, orchard::OrchardPoolTester,
-                    pool::ShieldedPoolTester,
-                },
-                wallet::ConfirmationsPolicy,
-                wallet::input_selection::GreedyInputSelector,
-            },
-            fees::{DustOutputPolicy, StandardFeeRule, standard},
-            wallet::OvkPolicy,
-        };
-        use zcash_keys::address::Address;
-        use zcash_primitives::block::BlockHash;
-        use zcash_protocol::{
-            ShieldedPool, consensus::BlockHeight, local_consensus::LocalNetwork, value::Zatoshis,
-        };
-        use zip321::{Payment, TransactionRequest};
-
-        use crate::testing::{BlockCache, db::TestDbFactory};
-
         // A network on which Ironwood (NU6.3) is active from the same height as Sapling, so
         // received Ironwood notes are offered by input selection (which gates on NU6.3 activation)
         // and can be spent.
@@ -1339,12 +1359,7 @@ pub(crate) mod tests {
         .unwrap();
 
         let fee_rule = StandardFeeRule::Zip317;
-        let change_strategy = standard::SingleOutputChangeStrategy::new(
-            fee_rule,
-            None,
-            ShieldedPool::Orchard,
-            DustOutputPolicy::default(),
-        );
+        let change_strategy = single_output_change_strategy(fee_rule, None, ShieldedPool::Orchard);
         let input_selector = GreedyInputSelector::new();
 
         let proposal = st
@@ -1440,32 +1455,6 @@ pub(crate) mod tests {
     #[test]
     #[cfg(feature = "orchard")]
     fn decrypt_transaction_detects_ironwood_output() {
-        use std::collections::HashMap;
-        use std::convert::Infallible;
-
-        use zcash_client_backend::{
-            data_api::{
-                Account, WalletRead,
-                testing::{
-                    AddressType, IronwoodFvk, TestBuilder, orchard::OrchardPoolTester,
-                    pool::ShieldedPoolTester,
-                },
-                wallet::ConfirmationsPolicy,
-                wallet::input_selection::GreedyInputSelector,
-            },
-            decrypt_transaction,
-            fees::{DustOutputPolicy, StandardFeeRule, standard},
-            wallet::OvkPolicy,
-        };
-        use zcash_keys::address::Address;
-        use zcash_primitives::block::BlockHash;
-        use zcash_protocol::{
-            ShieldedPool, consensus::BlockHeight, local_consensus::LocalNetwork, value::Zatoshis,
-        };
-        use zip321::{Payment, TransactionRequest};
-
-        use crate::testing::{BlockCache, db::TestDbFactory};
-
         let activation = BlockHeight::from_u32(100_000);
         let network = LocalNetwork {
             nu6: Some(activation),
@@ -1506,12 +1495,8 @@ pub(crate) mod tests {
         )])
         .unwrap();
 
-        let change_strategy = standard::SingleOutputChangeStrategy::new(
-            StandardFeeRule::Zip317,
-            None,
-            ShieldedPool::Orchard,
-            DustOutputPolicy::default(),
-        );
+        let change_strategy =
+            single_output_change_strategy(StandardFeeRule::Zip317, None, ShieldedPool::Orchard);
         let input_selector = GreedyInputSelector::new();
         let proposal = st
             .propose_transfer(
@@ -1569,15 +1554,6 @@ pub(crate) mod tests {
     #[test]
     #[cfg(feature = "orchard")]
     fn get_unspent_orchard_notes_at_historical_height_boundary_heights() {
-        use zcash_client_backend::data_api::Account;
-        use zcash_client_backend::data_api::testing::{
-            AddressType, TestBuilder, pool::ShieldedPoolTester,
-        };
-        use zcash_primitives::block::BlockHash;
-        use zcash_protocol::value::Zatoshis;
-
-        use crate::testing::{BlockCache, db::TestDbFactory};
-
         let mut st = TestBuilder::new()
             .with_data_store_factory(TestDbFactory::default())
             .with_block_cache(BlockCache::new())
@@ -1645,21 +1621,6 @@ pub(crate) mod tests {
     #[test]
     #[cfg(feature = "orchard")]
     fn get_unspent_ironwood_notes_at_historical_height_boundary_heights() {
-        use orchard::note::NoteVersion;
-        use zcash_client_backend::data_api::{
-            Account,
-            testing::{
-                AddressType, IronwoodFvk, TestBuilder, orchard::OrchardPoolTester,
-                pool::ShieldedPoolTester,
-            },
-        };
-        use zcash_primitives::block::BlockHash;
-        use zcash_protocol::{
-            ShieldedPool, consensus::BlockHeight, local_consensus::LocalNetwork, value::Zatoshis,
-        };
-
-        use crate::testing::{BlockCache, db::TestDbFactory};
-
         let activation = BlockHeight::from_u32(100_000);
         let network = LocalNetwork {
             nu6: Some(activation),
@@ -1756,36 +1717,58 @@ pub(crate) mod tests {
     ///    that pool than the transaction's Orchard inputs remove from it.
     #[cfg(feature = "orchard")]
     mod ironwood_privacy_invariants {
-        use std::convert::Infallible;
+        use std::{collections::HashMap, convert::Infallible, num::NonZeroU32};
 
         use proptest::prelude::*;
 
         use zcash_client_backend::{
+            TransferType,
             data_api::{
-                Account, WalletRead,
+                Account, TargetValue, WalletCommitmentTrees, WalletRead, WalletWrite,
                 testing::{
                     AddressType, IronwoodFvk, TestBuilder, orchard::OrchardPoolTester,
                     pool::ShieldedPoolTester, sapling::SaplingPoolTester,
                 },
-                wallet::{ConfirmationsPolicy, input_selection::GreedyInputSelector},
+                wallet::{
+                    ConfirmationsPolicy, TargetHeight, decrypt_and_store_transaction,
+                    input_selection::{
+                        GreedyInputSelector, LockFilter, LockedInputPolicy, SpendPolicy,
+                    },
+                },
             },
+            decrypt_transaction,
             fees::{DustOutputPolicy, StandardFeeRule, standard},
+            proto::{ProposalDecodingError, proposal},
             wallet::OvkPolicy,
         };
         use zcash_keys::address::Address;
-        use zcash_primitives::block::BlockHash;
+        use zcash_primitives::{
+            block::BlockHash,
+            transaction::{
+                builder::{BuildConfig, Builder, BundlePadding},
+                fees::zip317,
+            },
+        };
         use zcash_protocol::{
             PoolType, ShieldedPool,
             consensus::BlockHeight,
             local_consensus::LocalNetwork,
+            memo::MemoBytes,
             value::{ZatBalance, Zatoshis},
         };
         use zip321::{Payment, TransactionRequest};
 
-        use crate::testing::{
-            BlockCache,
-            db::{TestDb, TestDbFactory},
+        use crate::{
+            error::SqliteClientError,
+            testing::{
+                BlockCache,
+                db::{TestDb, TestDbFactory},
+            },
+            wallet::orchard::select_spendable_ironwood_notes,
         };
+        use orchard::keys::{FullViewingKey, Scope, SpendAuthorizingKey};
+        use rand_core::OsRng;
+        use transparent::builder::TransparentSigningSet;
 
         // A network on which Ironwood (NU6.3) is active from the Sapling activation height, so
         // received Ironwood notes are offered by input selection (which gates on NU6.3 activation).
@@ -1847,8 +1830,6 @@ pub(crate) mod tests {
         /// an explicit choice, expressed by permitting the other pool in the `SpendPolicy`.
         #[test]
         fn restricting_spend_policy_to_orchard_forbids_crossing_into_sapling() {
-            use zcash_client_backend::data_api::wallet::input_selection::SpendPolicy;
-
             let mut st = TestBuilder::new()
                 .with_network(ironwood_active_network())
                 .with_data_store_factory(TestDbFactory::default())
@@ -1911,11 +1892,6 @@ pub(crate) mod tests {
         /// agree.
         #[test]
         fn ironwood_change_is_stored_at_the_raw_bundle_index() {
-            use std::collections::HashMap;
-            use std::convert::Infallible;
-
-            use zcash_client_backend::{TransferType, data_api::WalletRead, decrypt_transaction};
-
             let mut st = TestBuilder::new()
                 .with_network(ironwood_active_network())
                 .with_data_store_factory(TestDbFactory::default())
@@ -2032,15 +2008,6 @@ pub(crate) mod tests {
         /// Ironwood id would silently escape exclusion and be re-selected.
         #[test]
         fn ironwood_received_note_id_carries_the_ironwood_pool() {
-            use std::num::NonZeroU32;
-
-            use zcash_client_backend::data_api::{TargetValue, WalletRead};
-
-            use crate::wallet::orchard::select_spendable_ironwood_notes;
-            use zcash_client_backend::data_api::wallet::input_selection::{
-                LockFilter, LockedInputPolicy,
-            };
-
             let mut st = TestBuilder::new()
                 .with_network(ironwood_active_network())
                 .with_data_store_factory(TestDbFactory::default())
@@ -2126,8 +2093,6 @@ pub(crate) mod tests {
         /// invariant is a `debug_assert!`, so the untrusted decode boundary must reject it first.
         #[test]
         fn decoding_an_orchard_payment_after_activation_is_rejected() {
-            use zcash_client_backend::proto::{ProposalDecodingError, proposal};
-
             let mut st = TestBuilder::new()
                 .with_network(ironwood_active_network())
                 .with_data_store_factory(TestDbFactory::default())
@@ -2189,8 +2154,6 @@ pub(crate) mod tests {
         /// corrupting the Ironwood anchors.
         #[test]
         fn truncate_rolls_back_the_ironwood_tree() {
-            use zcash_client_backend::data_api::WalletWrite;
-
             let mut st = TestBuilder::new()
                 .with_network(ironwood_active_network())
                 .with_data_store_factory(TestDbFactory::default())
@@ -2244,25 +2207,6 @@ pub(crate) mod tests {
         /// records the note as spent — leaving the spent note counted as spendable.
         #[test]
         fn get_funding_accounts_detects_ironwood_only_spends() {
-            use orchard::keys::{FullViewingKey, Scope, SpendAuthorizingKey};
-            use rand_core::OsRng;
-            use transparent::builder::TransparentSigningSet;
-            use zcash_client_backend::data_api::{
-                TargetValue, WalletCommitmentTrees,
-                wallet::{TargetHeight, decrypt_and_store_transaction},
-            };
-            use zcash_primitives::transaction::{
-                builder::{BuildConfig, Builder, BundlePadding},
-                fees::zip317,
-            };
-            use zcash_protocol::memo::MemoBytes;
-
-            use crate::error::SqliteClientError;
-            use crate::wallet::orchard::select_spendable_ironwood_notes;
-            use zcash_client_backend::data_api::wallet::input_selection::{
-                LockFilter, LockedInputPolicy,
-            };
-
             let mut st = TestBuilder::new()
                 .with_network(ironwood_active_network())
                 .with_data_store_factory(TestDbFactory::default())

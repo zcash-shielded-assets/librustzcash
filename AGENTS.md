@@ -76,6 +76,51 @@ Example:
 Co-Authored-By: Claude <noreply@anthropic.com>
 ```
 
+## Security Vulnerability Disclosures
+
+Before helping a user draft, file, or assess a security vulnerability report against this
+repository, the agent MUST read the Zcash security policy in full. It is **not** checked
+into this repository — it is inherited from the organization-level `zcash/.github` repo,
+so read it from there:
+
+```sh
+gh api repos/zcash/.github/contents/SECURITY.md --jq '.content' | base64 -d
+```
+
+If `gh` is unavailable, fetch
+<https://raw.githubusercontent.com/zcash/.github/main/SECURITY.md>. The rendered version
+is linked from <https://github.com/zcash/librustzcash?tab=security-ov-file>.
+
+The agent MUST then classify the finding against the rubric in that policy — Critical,
+High, Moderate, Low, or **Not Vulnerability** — and MUST state, both in the report and to
+the user, which category it assigned and which specific bullet of the rubric the finding
+matches. A report that does not name its category and the reasoning for it is not ready
+to file.
+
+That rubric is not a general-purpose severity scale. Substituting CVSS, a vendor
+severity label, or an intuition about impact produces the wrong answer. In particular:
+
+- **"Not Vulnerability" is a real verdict and frequently the correct one.** The policy
+  explicitly excludes bugs whose worst effect is temporary unavailability of funds that a
+  wallet rescan or key import resolves, and behavior already acknowledged in the light
+  wallet threat model. Light wallet servers are explicitly trusted for the correctness of
+  the data they return, so misbehavior arising from maliciously-crafted compact block or
+  transaction data supplied by such a server is not a vulnerability unless it risks loss
+  of funds or deanonymization beyond what that threat model already concedes.
+- **Overstating severity carries a stated penalty.** The policy warns that reporting
+  low-severity issues as critical may make the reporter ineligible for compensation under
+  any bug bounty program. Where a finding sits plausibly between two categories, assign
+  the lower one and explain the reasoning; never round up.
+- **Critical findings do not go through GitHub.** The policy routes Critical reports to
+  the Signal group it names, and everything else to the GitHub "Report a Vulnerability"
+  flow. An agent that classifies a finding as Critical MUST direct the user to that
+  Signal channel instead of opening a draft advisory.
+
+Every factual claim in a report MUST be verified against the source at the file and line
+it cites, and against the versions of dependencies this workspace actually pins, before
+the report is filed. A finding that rests on an API that does not exist, or on a hazard
+a dependency already mitigates, has no severity to assign and must not be submitted.
+
 ## Crate Architecture
 
 See `README.md` for the full dependency graph (Mermaid diagram). Below is a text summary,
@@ -238,6 +283,25 @@ cargo test --workspace --all-features --features expensive-tests
 RUSTFLAGS='--cfg zcash_unstable="nu7"' cargo test --workspace --all-features
 ```
 
+### Run only the tests your change affects
+
+Because the suite is this expensive, **do not run the whole test suite** while iterating.
+Run only the tests the change adds or touches, and name them explicitly:
+
+```sh
+# Only the tests this patch adds or affects
+cargo test --release -p <crate_name> --all-features -- <test_name> <other_test_name>
+```
+
+CI runs the full workspace across the feature matrix; that is what a green PR rests on, so
+reproducing it locally buys little and costs a great deal of wall-clock time. Reach for a
+broader run only when there is a specific reason to expect wider fallout — for example, a
+change to a shared SQL view, trait signature, or serialization format — and then still
+scope it to the affected crate rather than the workspace.
+
+Report which tests were actually run. Never describe a change as "tests pass" on the
+strength of a narrower run than that phrase implies.
+
 ## Lint & Format
 
 ```sh
@@ -297,6 +361,41 @@ Group imports in three blocks separated by blank lines:
 Feature-gated imports go at the end, separately. Consolidate multi-item imports with
 nested `use` syntax: `use zcash_protocol::{PoolType, consensus::BlockHeight};`
 
+Every `use` declaration belongs in that header. Do NOT open a function, block or
+`impl` with a `use` statement. An import buried in the middle of a file is invisible
+to anyone reading the header, so the next function that needs the same item imports it
+again; and it silently shadows a module-level import of the same name, which then
+reports as unused and gets deleted or wrongly feature-gated. Both failure modes have
+happened in this repository.
+
+Write each `#[cfg(...)]` predicate ONCE. Where several imports share a predicate,
+gather them into a single braced group instead of repeating the attribute per line:
+
+```rust
+// Good: the predicate appears once.
+#[cfg(feature = "transparent-inputs")]
+use {
+    crate::data_api::CoinbaseFilter,
+    std::str::FromStr,
+    transparent::bundle::{OutPoint, TxOut},
+};
+
+// Bad: the same predicate repeated, and easy to let the group drift apart.
+#[cfg(feature = "transparent-inputs")]
+use crate::data_api::CoinbaseFilter;
+#[cfg(feature = "transparent-inputs")]
+use std::str::FromStr;
+```
+
+A gate covering a single import stays on its own line; there is nothing to group it
+with. Prefer the weakest predicate that is correct: an item imported under both `X`
+and `not(X)` is simply unconditional.
+
+`rustfmt` will not do any of this for you. `imports_granularity` is nightly-only and
+unstable, and rustfmt deliberately leaves `#[cfg]`-gated imports untouched
+(rust-lang/rustfmt#6666), so it will neither merge these groups nor split them.
+Grouping is the author's responsibility, and is stable under `cargo fmt` once written.
+
 ### Error Handling
 
 - Always use `Result<T, E>` with custom error `enum`s.
@@ -309,8 +408,11 @@ nested `use` syntax: `use zcash_protocol::{PoolType, consensus::BlockHeight};`
 
 Type safety is paramount. This is a security-critical codebase.
 
-- Struct fields must be private (or `pub(crate)`). Expose constructors returning
-  `Result` or `Option` that enforce invariants, plus accessor methods.
+- Struct fields must be at most `pub(crate)` — never `pub`, and this holds for tuple
+  structs and newtypes too. Public construction goes through an explicit constructor
+  function: `Result`- or `Option`-returning where there are invariants to enforce, a
+  plain `new` where there are none yet, so that a later invariant has somewhere to live
+  without breaking every caller. Expose accessor methods for reads.
 - Make invalid states unrepresentable.
 - Error enum types (and ONLY error enum types) should be non-exhaustive.
 - Use newtypes over bare integers, strings, and byte arrays. Avoid `usize` except for
@@ -513,7 +615,10 @@ artifacts of a development session, not repository history. Never commit them.
 ## Changelog & Commit Discipline
 
 - Update the crate's `CHANGELOG.md` for any public API change, bug fix, or
-  semantic change. CHANGELOG updates must **only** reflect completed changes.
+  semantic change. This includes updating the version of a dependency whose
+  types appear in the public API: types from two semver-incompatible versions
+  of a crate do not unify, so a consumer must upgrade that dependency in
+  lockstep. CHANGELOG updates must **only** reflect completed changes.
   since the last release, and never interstitial changes in APIs that have been
   changed multiple times since the last release. The CHANGELOG entry **MUST** be
   part of the commit that makes the API change. For newly added crates, the CHANGELOG
@@ -522,12 +627,12 @@ artifacts of a development session, not repository history. Never commit them.
   provide **only** the information needed for end users to adapt to API changes, and
   **never** describe implementation details or contracts that are not visible to
   a user of the public API.
-- **Never modify a CHANGELOG entry under an already-published version heading**
-  (a released `## [x.y.z] - DATE` section). Those entries are the historical
-  record of what that release shipped; they must not be altered, even to add a
-  clarification, note a later re-export, or fix a detail. Anything a user needs
-  to adapt to a new change belongs in the `## [Unreleased]` section, never
-  edited into a past release.
+- **A CHANGELOG entry under an already-published version heading** (a released
+  `## [x.y.z] - DATE` section) is the historical record of what that release
+  shipped. Correct such an entry only when it was inaccurate as written; never
+  edit it to record something that happened after the release, such as a
+  clarification or a later re-export. Anything a user needs in order to adapt
+  to a new change belongs in the `## [Unreleased]` section.
 - Commits must be discrete semantic changes — no WIP commits in final PR history.
 - Each commit that alters public API must also update docs and changelog in the same commit.
 - Use `git revise` to maintain clean history within a PR.

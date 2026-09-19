@@ -1,6 +1,6 @@
 [package]
 name = "pczt"
-version = "0.9.1"
+version = "0.9.2"
 authors = ["Jack Grigg <jack@electriccoin.co>"]
 edition.workspace = true
 rust-version.workspace = true
@@ -108,7 +108,7 @@ transparent = [
 ]
 
 ## Enables building a PCZT from the output of `zcash_primitives`'s `Builder::build_for_pczt`.
-zcp-builder = ["dep:zcash_primitives"]
+zcp-builder = ["dep:zcash_primitives", "orchard", "sapling", "transparent"]
 
 #! ### PCZT roles behind feature flags
 #!
@@ -169,13 +169,17 @@ tx-extractor = [
 # Undocumented internal feature flag for enabling features needed for tests.
 internal-tests = [
     "io-finalizer",
+    "orchard",
     "prover",
+    "sapling",
     "signer",
     "spend-finalizer",
+    "transparent",
     "tx-extractor",
     "zsa",
     "zcash_protocol/local-consensus",
     "zcash_script/signature-validation",
+    "zcp-builder",
 ]
 
 [[test]]
