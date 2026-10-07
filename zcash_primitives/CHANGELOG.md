@@ -10,6 +10,46 @@ workspace.
 
 ## [Unreleased]
 
+### ZSA compatibility
+- ZSA transaction construction, serialization, transaction IDs, and signing hashes
+  use `BranchId::Zsa`; the deployed ZSA encoding is preserved independently of official NU7.
+- `TxVersion::has_zip233` takes a consensus branch ID; only the deployed ZSA V6
+  layout supports its existing header amount.
+
+### Added
+- Experimental `TxVersion::V7` and `TransactionData::from_parts_v7` support
+  behind `zcash_unstable="nutachyon"`. V7 is enabled by NuTachyon and initially
+  uses the V6 transaction body and digest structure.
+
+### Changed
+- `BranchId::Nu7` is available without a custom compiler configuration, with
+  consensus branch ID `0x77190AD9`.
+
+## [0.30.1] - 2026-08-18
+
+### Added
+- `zcash_primitives::transaction::components::sapling::SPEND_DESCRIPTION_SIZE` and
+  `OUTPUT_DESCRIPTION_SIZE`, the sizes in bytes of a Sapling spend description and
+  output description in their v4 (pre-NU5) serialized forms. Each is the full
+  per-element cost on the wire in a version 4 transaction (the v5 form moves
+  proofs and signatures to bundle-level fields), so these are conservative upper
+  bounds: dividing a per-element byte budget by them yields a lower bound on the
+  number of spends or outputs that fit within that budget.
+- `zcash_primitives::transaction::components::sapling::testing::arb_bundle`, now
+  public behind the `test-dependencies` feature, generates a Sapling bundle with
+  arbitrary spends and outputs for cross-crate test strategies.
+- `zcash_primitives::transaction::components::orchard::SPEND_AUTH_SIG_SIZE` and
+  `BUNDLE_OVERHEAD`, the per-action spend authorization signature size and the
+  per-bundle overhead (excluding the proof and per-action data) for an
+  Orchard/Ironwood bundle.
+- `zcash_primitives::transaction::components::sapling::BUNDLE_OVERHEAD`, the
+  per-bundle overhead of a Sapling bundle (value balance, binding signature, and
+  CompactSize prefixes).
+- `zcash_primitives::transaction::fees::zip317::MAX_TRANSPARENT_INPUT_SIZE`,
+  `TRANSPARENT_BUNDLE_OVERHEAD`, and `TX_HEADER_SIZE`, the consensus-maximum
+  transparent input size, the transparent bundle overhead, and the fixed
+  transaction header size used in serialized-size estimation.
+
 ## [0.30.0] - 2026-07-23
 
 ### Added

@@ -10,6 +10,44 @@ workspace.
 
 ## [Unreleased]
 
+### ZSA compatibility
+- ZSA PCZTs use `BranchId::Zsa` and retain their existing version group, issuance
+  bundle, encryption domain, and signing hash. Extraction rejects mismatched ZSA
+  branch IDs and version groups.
+
+### Added
+- Experimental support for creating and extracting V7 PCZTs under NuTachyon,
+  behind `zcash_unstable="nutachyon"`, using the V6 transaction body.
+- `pczt::EncodingVersion`
+- `pczt::Pczt::serialize_with_version`
+- `pczt::common::Global::{coin_type, fallback_lock_time, tx_modifiable}`
+- `pczt::roles::signer::Signer::with_transparent_sighash_policy`
+- `pczt::roles::spend_finalizer::SpendFinalizer::with_sighash_policy`
+
+### Changed
+- `pczt::roles::signer::Signer::{sign_transparent, append_transparent_signature,
+  transparent_sighash}` now check the consistency of the transparent input, and use only
+  `SighashType::ALL`. Use `Signer::with_transparent_sighash_policy` to permit other
+  sighash types.
+- `pczt::roles::spend_finalizer::SpendFinalizer::finalize_spends` now finalizes only
+  `SighashType::ALL` signatures that match their input's `sighash_type`; use
+  `SpendFinalizer::with_sighash_policy` to permit other sighash types.
+- `pczt::roles::creator::Creator::new` creates a v6 PCZT for the NU7
+  consensus branch ID `0x77190AD9`, and the `pczt::roles::updater::Updater`
+  anchor setters accept a PCZT with that branch ID. Neither needs the
+  `--cfg zcash_unstable="nu7"` configuration flag any more.
+
+## [0.9.3] - 2026-08-07
+
+### Added
+- `impl {core::fmt::Display, core::error::Error} for pczt::ParseError`
+- `impl {core::fmt::Display, core::error::Error} for pczt::ExtractError`
+
+### Changed
+- The `orchard` and `sapling` features are now enabled by default. Consumers
+  that require a smaller feature set (such as `no_std` signers) should disable
+  default features and enable only the features they need.
+
 ## [0.9.2] - 2026-08-03
 
 ### Added

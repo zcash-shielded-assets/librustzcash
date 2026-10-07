@@ -467,7 +467,6 @@ impl<AccountId: Debug> transparent_fees::InputView for WalletTransparentOutput<A
         match self.known_input_size {
             Some(size) => transparent_fees::InputSize::Known(size),
             None => {
-                // Fall back to default: only P2PKH is recognized.
                 match zcash_script::script::PubKey::parse(&self.txout.script_pubkey().0)
                     .ok()
                     .as_ref()
@@ -475,6 +474,17 @@ impl<AccountId: Debug> transparent_fees::InputView for WalletTransparentOutput<A
                 {
                     Some(zcash_script::solver::ScriptKind::PubKeyHash { .. }) => {
                         transparent_fees::InputSize::STANDARD_P2PKH
+                    }
+                    Some(zcash_script::solver::ScriptKind::ScriptHash { .. }) => {
+                        // P2SH input size depends on the redeem script, which the
+                        // wallet must set via `with_known_input_size` (the SQLite
+                        // backend does this by reading the redeem script from the DB
+                        // and computing the exact size via
+                        // `p2sh_input_serialized_len`). Without it we cannot
+                        // determine the exact input size; return `Unknown` so the
+                        // estimator falls back to the consensus-maximum input size
+                        // rather than guessing.
+                        transparent_fees::InputSize::Unknown(self.outpoint.clone())
                     }
                     _ => transparent_fees::InputSize::Unknown(self.outpoint.clone()),
                 }
@@ -1058,6 +1068,18 @@ impl TransparentAddressMetadata {
         }
     }
 
+    /// Returns a [`TransparentAddressMetadata`] with [`TransparentAddressSource::StandaloneAddress`]
+    /// source information for an imported bare transparent address and the specified exposure
+    /// height.
+    #[cfg(feature = "transparent-key-import")]
+    pub fn standalone_address(exposure: Exposure, next_check_time: Option<SystemTime>) -> Self {
+        Self {
+            source: TransparentAddressSource::StandaloneAddress,
+            exposure,
+            next_check_time,
+        }
+    }
+
     /// Returns the source metadata for the address.
     pub fn source(&self) -> &TransparentAddressSource {
         &self.source
@@ -1136,6 +1158,13 @@ pub enum TransparentAddressSource {
     /// This variant provides the redeem script directly.
     #[cfg(feature = "transparent-key-import")]
     StandaloneScript(script::Redeem),
+
+    /// The address was imported as a bare transparent address, without any associated key
+    /// material. The wallet watches for outputs received by the address, but holds neither
+    /// the public key (P2PKH) nor the redeem script (P2SH) from which it was derived, so
+    /// funds received by it cannot be spent unless that material is subsequently imported.
+    #[cfg(feature = "transparent-key-import")]
+    StandaloneAddress,
 }
 
 #[cfg(feature = "transparent-inputs")]
@@ -1149,6 +1178,8 @@ impl TransparentAddressSource {
             TransparentAddressSource::StandalonePubkey(_) => None,
             #[cfg(feature = "transparent-key-import")]
             TransparentAddressSource::StandaloneScript(_) => None,
+            #[cfg(feature = "transparent-key-import")]
+            TransparentAddressSource::StandaloneAddress => None,
         }
     }
 
@@ -1161,6 +1192,8 @@ impl TransparentAddressSource {
             TransparentAddressSource::StandalonePubkey(_) => None,
             #[cfg(feature = "transparent-key-import")]
             TransparentAddressSource::StandaloneScript(_) => None,
+            #[cfg(feature = "transparent-key-import")]
+            TransparentAddressSource::StandaloneAddress => None,
         }
     }
 
@@ -1174,6 +1207,8 @@ impl TransparentAddressSource {
             TransparentAddressSource::StandalonePubkey(_) => None,
             #[cfg(feature = "transparent-key-import")]
             TransparentAddressSource::StandaloneScript(redeem_script) => Some(redeem_script),
+            #[cfg(feature = "transparent-key-import")]
+            TransparentAddressSource::StandaloneAddress => None,
         }
     }
 }

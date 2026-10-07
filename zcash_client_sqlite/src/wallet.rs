@@ -366,7 +366,7 @@ impl IvkItemCache {
         let sapling = uivk.sapling().as_ref().map(|k| k.to_bytes().to_vec());
 
         #[cfg(feature = "transparent-inputs")]
-        let p2pkh = uivk.transparent().as_ref().map(|k| k.serialize());
+        let p2pkh = uivk.p2pkh().map(|k| k.serialize());
         #[cfg(not(feature = "transparent-inputs"))]
         let p2pkh = None;
 
@@ -825,6 +825,114 @@ pub(crate) fn transparent_receiver_address_exists(
         .is_some())
 }
 
+/// Returns the row id of an address-only standalone import of the given receiver address in
+/// the given account — a [`KeyScope::Foreign`] row with neither imported-material column set —
+/// if one exists.
+#[cfg(feature = "transparent-key-import")]
+fn standalone_address_only_row(
+    conn: &rusqlite::Transaction,
+    account_id: AccountRef,
+    addr_str: &str,
+) -> Result<Option<i64>, SqliteClientError> {
+    Ok(conn
+        .query_row(
+            "SELECT id FROM addresses
+             WHERE account_id = :account_id
+             AND cached_transparent_receiver_address = :address
+             AND key_scope = :key_scope
+             AND imported_transparent_receiver_pubkey IS NULL
+             AND imported_transparent_receiver_script IS NULL",
+            named_params![
+                ":account_id": account_id.0,
+                ":address": addr_str,
+                ":key_scope": KeyScope::Foreign.encode(),
+            ],
+            |row| row.get(0),
+        )
+        .optional()?)
+}
+
+/// Imports a standalone transparent receiver into the given account by its address alone,
+/// without any associated key material.
+///
+/// Returns the number of address rows inserted: `1` when a new receiver row was added, or `0`
+/// when nothing was inserted because the receiver address was already present in the wallet.
+#[cfg(feature = "transparent-key-import")]
+pub(crate) fn import_standalone_transparent_address<P: consensus::Parameters>(
+    conn: &rusqlite::Transaction,
+    params: &P,
+    account_uuid: AccountUuid,
+    address: ::transparent::address::TransparentAddress,
+) -> Result<usize, SqliteClientError> {
+    use ::transparent::address::TransparentAddress;
+
+    // Resolve the account up front so an unknown account is reported explicitly, rather than
+    // inferred from a zero-row INSERT below.
+    let account_id = get_account_ref(conn, account_uuid)?;
+
+    let addr_str = Address::Transparent(address).encode(params);
+
+    // The only identity an address-only import carries is the address itself, so the
+    // cross-account conflict check is on the receiver address of existing standalone imports
+    // (of any kind — a standalone import with key material subsumes an address-only one).
+    let existing_import_account = conn
+        .query_row(
+            "SELECT accounts.uuid AS account_uuid
+             FROM addresses
+             JOIN accounts ON accounts.id = addresses.account_id
+             WHERE cached_transparent_receiver_address = :address
+             AND key_scope = :key_scope",
+            named_params![
+                ":address": addr_str,
+                ":key_scope": KeyScope::Foreign.encode(),
+            ],
+            |row| row.get::<_, Uuid>("account_uuid"),
+        )
+        .optional()?;
+
+    if let Some(current) = existing_import_account {
+        if current == account_uuid.expose_uuid() {
+            // The address has already been imported; nothing to do.
+            return Ok(0);
+        } else {
+            return Err(SqliteClientError::StandaloneImportConflict(current));
+        }
+    }
+
+    // If this transparent receiver is already recorded as a derived address, the existing
+    // representation already covers it. See `import_standalone_transparent_pubkey_inner` for
+    // details of this resolution.
+    if transparent_receiver_address_exists(conn, &addr_str)? {
+        return Ok(0);
+    }
+
+    let receiver_flags = match address {
+        TransparentAddress::PublicKeyHash(_) => ReceiverFlags::P2PKH,
+        TransparentAddress::ScriptHash(_) => ReceiverFlags::P2SH,
+    };
+
+    let rows_affected = conn.execute(
+        r#"
+        INSERT INTO addresses (
+          account_id, key_scope, address, cached_transparent_receiver_address, receiver_flags
+        )
+        VALUES (
+          :account_id, :key_scope, :address, :address, :receiver_flags
+        )
+        "#,
+        named_params![
+            ":account_id": account_id.0,
+            ":key_scope": KeyScope::Foreign.encode(),
+            ":address": addr_str,
+            ":receiver_flags": receiver_flags.bits(),
+        ],
+    )?;
+
+    // The account is known (resolved above) and the receiver is not already recorded (checked
+    // above), so exactly one row is inserted.
+    Ok(rows_affected)
+}
+
 /// Imports a standalone transparent P2PKH receiver by its pubkey into the given account.
 ///
 /// Returns the number of address rows inserted: `1` when a new receiver row was added, or `0`
@@ -902,6 +1010,22 @@ fn import_standalone_transparent_pubkey_inner<P: consensus::Parameters>(
     }
 
     let addr_str = Address::Transparent(TransparentAddress::from_pubkey(&pubkey)).encode(params);
+
+    // If the receiver was previously imported into this account by its address alone (a
+    // Foreign-scope row with no key material), upgrade the existing row in place with the
+    // pubkey, preserving the row id and hence any attached outputs and exposure state.
+    if let Some(row_id) = standalone_address_only_row(conn, account_id, &addr_str)? {
+        conn.execute(
+            "UPDATE addresses
+             SET imported_transparent_receiver_pubkey = :imported_transparent_receiver_pubkey
+             WHERE id = :id",
+            named_params![
+                ":imported_transparent_receiver_pubkey": pubkey.serialize(),
+                ":id": row_id,
+            ],
+        )?;
+        return Ok(0);
+    }
 
     // If this transparent receiver is already recorded (for example it was derived as an
     // account receiver, so its row carries a NULL `imported_transparent_receiver_pubkey` and is
@@ -1003,6 +1127,23 @@ pub(crate) fn import_standalone_transparent_script<P: consensus::Parameters>(
     }
 
     let addr_str = Address::Transparent(addr).encode(params);
+
+    // If the receiver was previously imported into this account by its address alone (a
+    // Foreign-scope row with no key material), upgrade the existing row in place with the
+    // redeem script, preserving the row id and hence any attached outputs and exposure state.
+    if let Some(row_id) = standalone_address_only_row(conn, account_id, &addr_str)? {
+        conn.execute(
+            "UPDATE addresses
+             SET imported_transparent_receiver_script = :imported_transparent_receiver_script
+             WHERE id = :id",
+            named_params![
+                ":imported_transparent_receiver_script": &rs_bytes[..],
+                ":id": row_id,
+            ],
+        )?;
+        return Ok(());
+    }
+
     conn.execute(
         r#"
         INSERT INTO addresses (
@@ -1049,7 +1190,7 @@ pub(crate) fn get_next_available_address<P: consensus::Parameters, C: Clock>(
         {
             return Err(SqliteClientError::AddressGeneration(
                 AddressGenerationError::ReceiverTypeNotSupported(
-                    zcash_address::unified::Typecode::P2pkh,
+                    zcash_address::unified::Typecode::P2PKH,
                 ),
             ));
         }
@@ -1250,7 +1391,7 @@ pub(crate) fn find_account_for_address<P: consensus::Parameters>(
     params: &P,
     address: &Address,
 ) -> Result<Option<AccountUuid>, FindAccountForAddressError<SqliteClientError>> {
-    let addr_str = address.encode(params);
+    let addr_str = address.encode_receiver_preserving(params);
     // For a UA the transparent receiver (if any) may match the cached column; for non-UA
     // addresses the same string serves both roles (the `cached_transparent_receiver_address`
     // column only ever holds transparent addresses, so a Sapling query against it simply
@@ -1436,7 +1577,7 @@ pub(crate) fn get_last_generated_address_matching<P: consensus::Parameters>(
                 SqliteClientError::CorruptedData("Not a valid Zcash recipient address".to_owned())
             })
             .and_then(|addr| match addr {
-                Address::Unified(ua) => Ok(ua),
+                Address::Unified(ua) => Ok(*ua),
                 _ => Err(SqliteClientError::CorruptedData(format!(
                     "Addresses table contains {addr_str} which is not a unified address",
                 ))),
@@ -1574,7 +1715,7 @@ pub(crate) fn upsert_address<P: consensus::Parameters>(
             // the diversifier index is stored in big-endian order to allow sorting
             ":diversifier_index_be": &di_be,
             ":key_scope": KeyScope::EXTERNAL.encode(),
-            ":address": &address.encode(params),
+            ":address": &address.encode_receiver_preserving(params),
             ":transparent_child_index": transparent_child_index,
             ":cached_transparent_receiver_address": &cached_taddr,
             ":exposed_at_height": exposed_at_height.map(u32::from),
@@ -2518,17 +2659,15 @@ fn next_subtree_index<H: HashSer, const SHARD_HEIGHT: u8>(
         .unwrap_or(0))
 }
 
-/// Returns the spendable balance for the account at the specified height.
+/// Returns wallet balances, heights, and subtree indices without scan progress.
 ///
-/// This may be used to obtain a balance that ignores notes that have been detected so recently
-/// that they are not yet spendable, or for which it is not yet possible to construct witnesses.
-#[tracing::instrument(skip(tx, params, progress))]
-pub(crate) fn get_wallet_summary<P: consensus::Parameters>(
+/// See [`crate::WalletDb::get_wallet_snapshot`].
+#[tracing::instrument(skip(tx, params))]
+pub(crate) fn get_wallet_snapshot<P: consensus::Parameters>(
     tx: &rusqlite::Transaction,
     params: &P,
     confirmations_policy: ConfirmationsPolicy,
-    progress: &impl ProgressEstimator,
-) -> Result<Option<WalletSummary<AccountUuid>>, SqliteClientError> {
+) -> Result<Option<crate::WalletSnapshot<AccountUuid>>, SqliteClientError> {
     let chain_tip_height = match chain_tip_height(tx)? {
         Some(h) => h,
         None => {
@@ -2543,59 +2682,9 @@ pub(crate) fn get_wallet_summary<P: consensus::Parameters>(
         }
     };
 
-    let recover_until_height = recover_until_height(tx)?;
     let fully_scanned_height = block_fully_scanned(tx, params)?.map(|m| m.block_height());
     let target_height = TargetHeight::from(chain_tip_height + 1);
     let anchor_height = get_anchor_height(tx, target_height, confirmations_policy.trusted())?;
-
-    let sapling_progress = progress.sapling_scan_progress(
-        tx,
-        params,
-        birthday_height,
-        recover_until_height,
-        chain_tip_height,
-    )?;
-
-    #[cfg(feature = "orchard")]
-    let orchard_progress = progress.orchard_scan_progress(
-        tx,
-        params,
-        birthday_height,
-        recover_until_height,
-        chain_tip_height,
-    )?;
-    #[cfg(not(feature = "orchard"))]
-    let orchard_progress: Option<Progress> = None;
-
-    // Treat Sapling and Orchard outputs as having the same cost to scan.
-    let progress = sapling_progress
-        .as_ref()
-        .zip(orchard_progress.as_ref())
-        .map(|(s, o)| {
-            Progress::new(
-                Ratio::new(
-                    s.scan().numerator() + o.scan().numerator(),
-                    s.scan().denominator() + o.scan().denominator(),
-                ),
-                s.recovery()
-                    .zip(o.recovery())
-                    .map(|(s, o)| {
-                        Ratio::new(
-                            s.numerator() + o.numerator(),
-                            s.denominator() + o.denominator(),
-                        )
-                    })
-                    .or_else(|| s.recovery())
-                    .or_else(|| o.recovery()),
-            )
-        })
-        .or(sapling_progress)
-        .or(orchard_progress);
-
-    let progress = match progress {
-        Some(p) => p,
-        None => return Ok(None),
-    };
 
     let mut stmt_accounts = tx.prepare_cached("SELECT uuid FROM accounts")?;
     let mut account_balances = stmt_accounts
@@ -2914,19 +3003,99 @@ pub(crate) fn get_wallet_summary<P: consensus::Parameters>(
         ORCHARD_SHARD_HEIGHT,
     >(tx, crate::IRONWOOD_TABLES_PREFIX)?;
 
-    let summary = WalletSummary::new(
+    Ok(Some(crate::WalletSnapshot::new(
         account_balances,
         chain_tip_height,
         fully_scanned_height.unwrap_or(birthday_height - 1),
-        progress,
         next_sapling_subtree_index,
         #[cfg(feature = "orchard")]
         next_orchard_subtree_index,
         #[cfg(feature = "orchard")]
         next_ironwood_subtree_index,
-    );
+    )))
+}
 
-    Ok(Some(summary))
+/// Returns the spendable balance for the account at the specified height.
+///
+/// This may be used to obtain a balance that ignores notes that have been detected so recently
+/// that they are not yet spendable, or for which it is not yet possible to construct witnesses.
+///
+/// Progress is computed before the balance snapshot so a missing progress estimate still
+/// short-circuits with `Ok(None)`.
+#[tracing::instrument(skip(tx, params, progress))]
+pub(crate) fn get_wallet_summary<P: consensus::Parameters>(
+    tx: &rusqlite::Transaction,
+    params: &P,
+    confirmations_policy: ConfirmationsPolicy,
+    progress: &impl ProgressEstimator,
+) -> Result<Option<WalletSummary<AccountUuid>>, SqliteClientError> {
+    let chain_tip_height = match chain_tip_height(tx)? {
+        Some(h) => h,
+        None => {
+            return Ok(None);
+        }
+    };
+
+    let birthday_height = match wallet_birthday(tx)? {
+        Some(h) => h,
+        None => {
+            return Ok(None);
+        }
+    };
+
+    let recover_until_height = recover_until_height(tx)?;
+
+    let sapling_progress = progress.sapling_scan_progress(
+        tx,
+        params,
+        birthday_height,
+        recover_until_height,
+        chain_tip_height,
+    )?;
+
+    #[cfg(feature = "orchard")]
+    let orchard_progress = progress.orchard_scan_progress(
+        tx,
+        params,
+        birthday_height,
+        recover_until_height,
+        chain_tip_height,
+    )?;
+    #[cfg(not(feature = "orchard"))]
+    let orchard_progress: Option<Progress> = None;
+
+    // Treat Sapling and Orchard outputs as having the same cost to scan.
+    let progress = sapling_progress
+        .as_ref()
+        .zip(orchard_progress.as_ref())
+        .map(|(s, o)| {
+            Progress::new(
+                Ratio::new(
+                    s.scan().numerator() + o.scan().numerator(),
+                    s.scan().denominator() + o.scan().denominator(),
+                ),
+                s.recovery()
+                    .zip(o.recovery())
+                    .map(|(s, o)| {
+                        Ratio::new(
+                            s.numerator() + o.numerator(),
+                            s.denominator() + o.denominator(),
+                        )
+                    })
+                    .or_else(|| s.recovery())
+                    .or_else(|| o.recovery()),
+            )
+        })
+        .or(sapling_progress)
+        .or(orchard_progress);
+
+    let progress = match progress {
+        Some(p) => p,
+        None => return Ok(None),
+    };
+
+    Ok(get_wallet_snapshot(tx, params, confirmations_policy)?
+        .map(|snapshot| snapshot.into_wallet_summary(progress)))
 }
 
 /// Returns the memo for a received note, if the note is known to the wallet.
@@ -2969,6 +3138,7 @@ fn parse_tx<P: consensus::Parameters>(
     tx_bytes: &[u8],
     block_height: Option<BlockHeight>,
     expiry_height: Option<BlockHeight>,
+    fallback_height: Option<BlockHeight>,
 ) -> Result<(BlockHeight, Transaction), SqliteClientError> {
     // We need to provide a consensus branch ID so that pre-v5 `Transaction` structs
     // (which don't commit directly to one) can store it internally.
@@ -2978,7 +3148,8 @@ fn parse_tx<P: consensus::Parameters>(
     //   upgrade boundary, so the expiry height must be in the same epoch).
     // - Otherwise, we use a placeholder for the initial transaction parse (as the
     //   consensus branch ID is not used there), and then either use its non-zero expiry
-    //   height or return an error.
+    //   height, or fall back to the caller-supplied fallback height (typically the
+    //   wallet's view of the chain tip).
     if let Some(height) =
         block_height.or_else(|| expiry_height.filter(|h| h > &BlockHeight::from(0)))
     {
@@ -2992,7 +3163,24 @@ fn parse_tx<P: consensus::Parameters>(
 
         let expiry_height = tx_data.expiry_height();
         if expiry_height > BlockHeight::from(0) {
-            TransactionData::from_parts(
+            #[cfg(not(all(feature = "zip-233", zcash_unstable = "zip233")))]
+            let tx_data = TransactionData::from_parts(
+                tx_data.version(),
+                BranchId::for_height(params, expiry_height),
+                tx_data.lock_time(),
+                expiry_height,
+                #[cfg(feature = "zip-233")]
+                zcash_protocol::value::Zatoshis::ZERO,
+                tx_data.transparent_bundle().cloned(),
+                tx_data.sprout_bundle().cloned(),
+                tx_data.sapling_bundle().cloned(),
+                tx_data
+                    .orchard_bundle()
+                    .and_then(|bundle| bundle.as_vanilla())
+                    .cloned(),
+            );
+            #[cfg(all(feature = "zip-233", zcash_unstable = "zip233"))]
+            let tx_data = TransactionData::from_parts_with_zip233(
                 tx_data.version(),
                 BranchId::for_height(params, expiry_height),
                 tx_data.lock_time(),
@@ -3006,10 +3194,19 @@ fn parse_tx<P: consensus::Parameters>(
                     .orchard_bundle()
                     .and_then(|bundle| bundle.as_vanilla())
                     .cloned(),
-            )
-            .freeze()
-            .map(|t| (expiry_height, t))
-            .map_err(SqliteClientError::from)
+            );
+            tx_data
+                .freeze()
+                .map(|t| (expiry_height, t))
+                .map_err(SqliteClientError::from)
+        } else if let Some(fallback_height) = fallback_height {
+            // Unmined with no expiry, so no epoch is recorded for it. The branch ID
+            // does not affect parsing (absent from the pre-v5 serialized form; v5
+            // onward commit to their own), so select it from the caller-supplied
+            // fallback height, typically the wallet's view of the chain tip.
+            Transaction::read(tx_bytes, BranchId::for_height(params, fallback_height))
+                .map(|t| (fallback_height, t))
+                .map_err(SqliteClientError::from)
         } else {
             Err(SqliteClientError::CorruptedData(
                 "Consensus branch ID not known, cannot parse this transaction until it is mined"
@@ -3045,7 +3242,11 @@ pub(crate) fn get_transaction<P: Parameters>(
         },
     )
     .optional()?
-    .and_then(|(t_opt, b, e)| t_opt.as_ref().map(|t| parse_tx(params, t, b, e)))
+    .and_then(|(t_opt, b, e)| {
+        t_opt
+            .as_ref()
+            .map(|t| parse_tx(params, t, b, e, chain_tip_height(conn)?))
+    })
     .transpose()
 }
 
@@ -3524,12 +3725,14 @@ pub(crate) fn get_max_height_hash(
     .optional()
 }
 
+/// Returns the [`TxRef`] of the stored transaction row, so a caller can attach further
+/// per-transaction facts (e.g. its ZIP 318 classification) in the same database transaction.
 pub(crate) fn store_transaction_to_be_sent<P: consensus::Parameters>(
     conn: &rusqlite::Transaction,
     params: &P,
     #[cfg(feature = "transparent-inputs")] gap_limits: &GapLimits,
     sent_tx: &SentTransaction<AccountUuid>,
-) -> Result<(), SqliteClientError> {
+) -> Result<TxRef, SqliteClientError> {
     let tx_ref = put_tx_data(
         conn,
         sent_tx.tx(),
@@ -3772,7 +3975,7 @@ pub(crate) fn store_transaction_to_be_sent<P: consensus::Parameters>(
         queue_tx_status(conn, sent_tx.tx().txid())?;
     }
 
-    Ok(())
+    Ok(tx_ref)
 }
 
 pub(crate) fn set_transaction_status<P: consensus::Parameters>(
@@ -4976,6 +5179,8 @@ pub(crate) fn get_txs_spending_transparent_outputs_of<P: consensus::Parameters>(
          AND ts.transaction_id IS NOT NULL",
     )?;
 
+    let chain_tip = chain_tip_height(conn)?;
+
     spending_txs_stmt
         .query_and_then(named_params![":transaction_id": tx_ref.0], |row| {
             let spending_tx_ref = row.get(0).map(TxRef)?;
@@ -4988,6 +5193,7 @@ pub(crate) fn get_txs_spending_transparent_outputs_of<P: consensus::Parameters>(
                 &tx_bytes,
                 block.map(BlockHeight::from),
                 expiry.map(BlockHeight::from),
+                chain_tip,
             )?;
 
             Ok((spending_tx_ref, spending_tx))
@@ -5167,18 +5373,29 @@ pub(crate) fn put_tx_data(
 /// reports as unclassified rather than as a decision that the transaction is not a migration
 /// transaction. Rows written before this column existed keep that default, and need the
 /// transaction rescanned before they can be labelled.
+///
+/// `tx_ref` must name an existing row. An `UPDATE` matching nothing is not a SQLite error, so
+/// without the row-count check below this would report success having written nothing, and the
+/// transaction would afterwards read as never classified — indistinguishable from one that was
+/// never a candidate, which is the distinction the "not classified" code exists to preserve.
 pub(crate) fn put_zip318_classification(
     conn: &rusqlite::Connection,
     tx_ref: TxRef,
     classification: zcash_protocol::zip318::Zip318Classification,
 ) -> Result<(), SqliteClientError> {
-    conn.execute(
+    let rows_affected = conn.execute(
         "UPDATE transactions SET zip318_kind = :zip318_kind WHERE id_tx = :id_tx",
         named_params![
             ":zip318_kind": classification.to_code(),
             ":id_tx": tx_ref.0,
         ],
     )?;
+    if rows_affected != 1 {
+        return Err(SqliteClientError::CorruptedData(format!(
+            "ZIP 318 classification names transaction {}, which does not exist",
+            tx_ref.0,
+        )));
+    }
 
     Ok(())
 }
@@ -5359,8 +5576,7 @@ fn delete_retrieval_queue_entry(
     Ok(())
 }
 
-// A utility function for creation of parameters for use in `insert_sent_output`
-// and `put_sent_output`
+// A utility function for creation of parameters for use in `put_sent_output`
 fn recipient_params<P: consensus::Parameters>(
     conn: &Connection,
     _params: &P,
@@ -5461,6 +5677,10 @@ fn flag_previously_received_change(
 }
 
 /// Records information about a transaction output that your wallet created.
+///
+/// Upserting, via [`put_sent_output`]: re-storing a transaction the wallet already recorded —
+/// a flow that obtains a transaction's bytes, dies before submitting them, and is handed the
+/// same transaction again — overwrites that output's row instead of failing on it.
 pub(crate) fn insert_sent_output<P: consensus::Parameters>(
     conn: &rusqlite::Transaction,
     params: &P,
@@ -5468,32 +5688,16 @@ pub(crate) fn insert_sent_output<P: consensus::Parameters>(
     from_account_uuid: AccountUuid,
     output: &SentTransactionOutput<AccountUuid>,
 ) -> Result<(), SqliteClientError> {
-    let mut stmt_insert_sent_output = conn.prepare_cached(
-        "INSERT INTO sent_notes (
-            transaction_id, output_pool, output_index, from_account_id,
-            to_address, to_account_id, value, memo)
-         VALUES (
-            :transaction_id, :output_pool, :output_index, :from_account_id,
-            :to_address, :to_account_id, :value, :memo)",
-    )?;
-
-    let (from_account_id, to_address, to_account_id, pool_type) =
-        recipient_params(conn, params, from_account_uuid, output.recipient())?;
-    let sql_args = named_params![
-        ":transaction_id": tx_ref.0,
-        ":output_pool": &pool_code(pool_type),
-        ":output_index": &i64::try_from(output.output_index()).unwrap(),
-        ":from_account_id": from_account_id.0,
-        ":to_address": &to_address,
-        ":to_account_id": to_account_id.map(|a| a.0),
-        ":value": &i64::from(ZatBalance::from(output.value())),
-        ":memo": memo_repr(output.memo())
-    ];
-
-    stmt_insert_sent_output.execute(sql_args)?;
-    flag_previously_received_change(conn, tx_ref)?;
-
-    Ok(())
+    put_sent_output(
+        conn,
+        params,
+        from_account_uuid,
+        tx_ref,
+        output.output_index(),
+        output.recipient(),
+        output.value(),
+        output.memo(),
+    )
 }
 
 /// Records information about a transaction output that your wallet created, from the constituent
@@ -5937,26 +6141,33 @@ mod tests {
 
     use rusqlite::{Connection, named_params};
     use sapling::zip32::ExtendedSpendingKey;
-    use secrecy::{ExposeSecret, SecretVec};
+    use secrecy::{ExposeSecret, Secret, SecretVec};
     use uuid::Uuid;
-    use zcash_client_backend::data_api::{
-        Account as _, AccountSource, TransactionDataRequest, TransactionStatus, WalletRead,
-        WalletWrite,
-        chain::{ChainState, CommitmentTreeRoot},
-        error::RewindError,
-        testing::{
-            AddressType, DataStoreFactory, FakeCompactOutput, InitialChainState, TestBuilder,
-            TestState, pool::ShieldedPoolTester, sapling::SaplingPoolTester,
+    use zcash_client_backend::{
+        data_api::{
+            Account as _, AccountBirthday, AccountSource, TransactionDataRequest,
+            TransactionStatus, WalletRead, WalletTest, WalletWrite,
+            chain::{ChainState, CommitmentTreeRoot},
+            error::RewindError,
+            testing::{
+                AddressType, DataStoreFactory, FakeCompactOutput, InitialChainState, TestBuilder,
+                TestState, pool::ShieldedPoolTester, sapling::SaplingPoolTester,
+                single_output_change_strategy,
+            },
+            wallet::{ConfirmationsPolicy, input_selection::GreedyInputSelector},
         },
-        wallet::ConfirmationsPolicy,
+        fees::StandardFeeRule,
+        wallet::OvkPolicy,
     };
     use zcash_keys::keys::UnifiedAddressRequest;
     use zcash_primitives::block::BlockHash;
     use zcash_protocol::{
         TxId,
-        consensus::{BlockHeight, NetworkUpgrade, Parameters},
-        value::Zatoshis,
+        consensus::{BlockHeight, BranchId, MAIN_NETWORK, NetworkUpgrade, Parameters},
+        value::{ZatBalance, Zatoshis},
+        zip318::{Zip318Classification, Zip318TxKind},
     };
+    use zip321::{Payment, TransactionRequest};
 
     use crate::{
         AccountUuid,
@@ -5965,9 +6176,9 @@ mod tests {
     };
 
     use super::{
-        KeyScope, ShieldedPool, TxQueryType, TxRef, account_birthday,
-        flag_previously_received_change, min_shared_checkpoint_height, queue_tx_retrieval,
-        select_truncation_height,
+        KeyScope, ShieldedPool, TxQueryType, TxRef, account_birthday, chain_tip_height,
+        flag_previously_received_change, get_transaction, min_shared_checkpoint_height, parse_tx,
+        put_zip318_classification, queue_tx_retrieval, select_truncation_height,
     };
 
     use incrementalmerkletree::frontier::Frontier;
@@ -6108,6 +6319,198 @@ mod tests {
     }
 
     #[test]
+    fn wallet_snapshot_matches_summary_on_empty_wallet() {
+        let st = TestBuilder::new()
+            .with_data_store_factory(TestDbFactory::default())
+            .with_account_from_sapling_activation(BlockHash([0; 32]))
+            .build();
+
+        assert_eq!(
+            st.wallet()
+                .db()
+                .get_wallet_snapshot(ConfirmationsPolicy::MIN)
+                .unwrap(),
+            None
+        );
+        assert_eq!(st.get_wallet_summary(ConfirmationsPolicy::MIN), None);
+    }
+
+    #[test]
+    #[cfg(feature = "orchard")]
+    fn wallet_snapshot_matches_summary_after_scan() {
+        use zcash_client_backend::data_api::testing::{
+            pool::ShieldedPoolTester, sapling::SaplingPoolTester,
+        };
+
+        let mut st = TestBuilder::new()
+            .with_data_store_factory(TestDbFactory::default())
+            .with_block_cache(BlockCache::new())
+            .with_account_from_sapling_activation(BlockHash([0; 32]))
+            .build();
+
+        let dfvk = SaplingPoolTester::test_account_fvk(&st);
+        let value = Zatoshis::const_from_u64(10_000);
+        let (h, _, _) = st.generate_next_block(&dfvk, AddressType::DefaultExternal, value);
+        st.scan_cached_blocks(h, 1);
+
+        // A scanned wallet always has tip + birthday, so the snapshot must be
+        // present even when LocalNetwork progress accounting still returns None.
+        let snapshot = st
+            .wallet()
+            .db()
+            .get_wallet_snapshot(ConfirmationsPolicy::MIN)
+            .unwrap()
+            .expect("scanned wallet must have a snapshot");
+        assert_eq!(snapshot.account_balances().len(), 1);
+
+        if let Some(summary) = st
+            .wallet()
+            .get_wallet_summary(ConfirmationsPolicy::MIN)
+            .unwrap()
+        {
+            assert_eq!(snapshot.account_balances(), summary.account_balances());
+            assert_eq!(snapshot.chain_tip_height(), summary.chain_tip_height());
+            assert_eq!(
+                snapshot.fully_scanned_height(),
+                summary.fully_scanned_height()
+            );
+            assert_eq!(
+                snapshot.next_sapling_subtree_index(),
+                summary.next_sapling_subtree_index()
+            );
+            assert_eq!(
+                snapshot.next_orchard_subtree_index(),
+                summary.next_orchard_subtree_index()
+            );
+            assert_eq!(
+                snapshot.next_ironwood_subtree_index(),
+                summary.next_ironwood_subtree_index()
+            );
+            assert_eq!(snapshot.is_synced(), summary.is_synced());
+            assert_eq!(
+                snapshot.clone().into_wallet_summary(summary.progress()),
+                summary
+            );
+        }
+
+        // Multi-account: both paths must report every account's balance map.
+        let seed = SecretVec::new(st.test_seed().unwrap().expose_secret().clone());
+        let birthday = st.test_account().unwrap().birthday().clone();
+        st.wallet_mut()
+            .create_account("", &seed, &birthday, None)
+            .unwrap();
+
+        // Fixed progress estimator: proves the snapshot path produces a full
+        // summary even when real progress accounting would return None.
+        struct FixedProgress;
+        impl super::ProgressEstimator for FixedProgress {
+            fn sapling_scan_progress<P: zcash_protocol::consensus::Parameters>(
+                &self,
+                _: &rusqlite::Connection,
+                _: &P,
+                _: BlockHeight,
+                _: Option<BlockHeight>,
+                _: BlockHeight,
+            ) -> Result<Option<zcash_client_backend::data_api::Progress>, SqliteClientError>
+            {
+                Ok(Some(zcash_client_backend::data_api::Progress::new(
+                    zcash_client_backend::data_api::Ratio::new(1, 1),
+                    None,
+                )))
+            }
+
+            fn orchard_scan_progress<P: zcash_protocol::consensus::Parameters>(
+                &self,
+                _: &rusqlite::Connection,
+                _: &P,
+                _: BlockHeight,
+                _: Option<BlockHeight>,
+                _: BlockHeight,
+            ) -> Result<Option<zcash_client_backend::data_api::Progress>, SqliteClientError>
+            {
+                Ok(Some(zcash_client_backend::data_api::Progress::new(
+                    zcash_client_backend::data_api::Ratio::new(1, 1),
+                    None,
+                )))
+            }
+        }
+
+        let tx = st.wallet().conn().unchecked_transaction().unwrap();
+        let forced =
+            super::get_wallet_summary(&tx, st.network(), ConfirmationsPolicy::MIN, &FixedProgress)
+                .unwrap()
+                .expect("fixed progress plus snapshot must yield a summary");
+        let snapshot = super::get_wallet_snapshot(&tx, st.network(), ConfirmationsPolicy::MIN)
+            .unwrap()
+            .expect("scanned wallet has a snapshot");
+        assert_eq!(snapshot.account_balances().len(), 2);
+        assert_eq!(snapshot.account_balances(), forced.account_balances());
+        assert_eq!(
+            snapshot.clone().into_wallet_summary(forced.progress()),
+            forced
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "orchard")]
+    fn wallet_snapshot_available_when_progress_is_missing() {
+        use zcash_client_backend::data_api::testing::{
+            pool::ShieldedPoolTester, sapling::SaplingPoolTester,
+        };
+
+        let mut st = TestBuilder::new()
+            .with_data_store_factory(TestDbFactory::default())
+            .with_block_cache(BlockCache::new())
+            .with_account_from_sapling_activation(BlockHash([0; 32]))
+            .build();
+
+        let dfvk = SaplingPoolTester::test_account_fvk(&st);
+        let value = Zatoshis::const_from_u64(10_000);
+        let (h, _, _) = st.generate_next_block(&dfvk, AddressType::DefaultExternal, value);
+        st.scan_cached_blocks(h, 1);
+
+        struct NoProgress;
+        impl super::ProgressEstimator for NoProgress {
+            fn sapling_scan_progress<P: zcash_protocol::consensus::Parameters>(
+                &self,
+                _: &rusqlite::Connection,
+                _: &P,
+                _: BlockHeight,
+                _: Option<BlockHeight>,
+                _: BlockHeight,
+            ) -> Result<Option<zcash_client_backend::data_api::Progress>, SqliteClientError>
+            {
+                Ok(None)
+            }
+
+            fn orchard_scan_progress<P: zcash_protocol::consensus::Parameters>(
+                &self,
+                _: &rusqlite::Connection,
+                _: &P,
+                _: BlockHeight,
+                _: Option<BlockHeight>,
+                _: BlockHeight,
+            ) -> Result<Option<zcash_client_backend::data_api::Progress>, SqliteClientError>
+            {
+                Ok(None)
+            }
+        }
+
+        let tx = st.wallet().conn().unchecked_transaction().unwrap();
+        assert_eq!(
+            super::get_wallet_summary(&tx, st.network(), ConfirmationsPolicy::MIN, &NoProgress)
+                .unwrap(),
+            None,
+            "missing progress must keep get_wallet_summary returning None"
+        );
+        let snapshot = super::get_wallet_snapshot(&tx, st.network(), ConfirmationsPolicy::MIN)
+            .unwrap()
+            .expect("snapshot must still return balances when progress is unavailable");
+        assert_eq!(snapshot.account_balances().len(), 1);
+        assert_eq!(snapshot.chain_tip_height(), h);
+    }
+
+    #[test]
     fn empty_database_has_no_balance() {
         let st = TestBuilder::new()
             .with_data_store_factory(TestDbFactory::default())
@@ -6223,6 +6626,105 @@ mod tests {
         let requests = st.wallet().transaction_data_requests().unwrap();
         assert!(requests.contains(&TransactionDataRequest::GetStatus(unexpired_txid)));
         assert!(requests.contains(&TransactionDataRequest::Enhancement(unexpired_txid)));
+    }
+
+    /// Returns a minimal serialized v1 transparent coinbase-style transaction: one input
+    /// spending the null prevout, one output. The v1 format predates ZIP 203, so the
+    /// transaction's expiry height parses as zero.
+    fn raw_v1_zero_expiry_tx() -> Vec<u8> {
+        let mut raw = vec![];
+        raw.extend_from_slice(&1u32.to_le_bytes()); // version
+        raw.push(0x01); // vin count
+        raw.extend_from_slice(&[0u8; 32]); // prevout txid (null)
+        raw.extend_from_slice(&u32::MAX.to_le_bytes()); // prevout index (coinbase)
+        raw.extend_from_slice(&[0x01, 0x51]); // script_sig
+        raw.extend_from_slice(&u32::MAX.to_le_bytes()); // sequence
+        raw.push(0x01); // vout count
+        raw.extend_from_slice(&5_000_000_000u64.to_le_bytes()); // value
+        raw.extend_from_slice(&[0x01, 0x51]); // script_pubkey
+        raw.extend_from_slice(&0u32.to_le_bytes()); // lock_time
+        raw
+    }
+
+    /// An unmined transaction with a zero expiry height carries no epoch information from
+    /// which to select a consensus branch ID, so parsing falls back to the wallet's view
+    /// of the chain tip; without a known chain tip it remains an error.
+    #[test]
+    fn parse_tx_unmined_zero_expiry_uses_fallback_height() {
+        let raw = raw_v1_zero_expiry_tx();
+        let chain_tip = MAIN_NETWORK.activation_height(NetworkUpgrade::Nu5).unwrap();
+
+        let (height, tx) = parse_tx(
+            &MAIN_NETWORK,
+            &raw,
+            None,
+            Some(BlockHeight::from(0)),
+            Some(chain_tip),
+        )
+        .unwrap();
+        assert_eq!(height, chain_tip);
+        assert_eq!(tx.expiry_height(), BlockHeight::from(0));
+        assert_eq!(
+            tx.consensus_branch_id(),
+            BranchId::for_height(&MAIN_NETWORK, chain_tip)
+        );
+
+        assert!(matches!(
+            parse_tx(&MAIN_NETWORK, &raw, None, Some(BlockHeight::from(0)), None),
+            Err(SqliteClientError::CorruptedData(_))
+        ));
+    }
+
+    /// A stored unmined transaction with a zero expiry height (e.g. a coinbase
+    /// transaction imported from a zcashd wallet before any chain scan) must be readable
+    /// back from the wallet database.
+    #[test]
+    fn get_transaction_reads_unmined_zero_expiry_tx() {
+        let mut st = TestBuilder::new()
+            .with_data_store_factory(TestDbFactory::default())
+            .with_block_cache(BlockCache::new())
+            .with_account_from_sapling_activation(BlockHash([0; 32]))
+            .build();
+
+        let dfvk = ExtendedSpendingKey::master(&[]).to_diversifiable_full_viewing_key();
+        let tip = st.sapling_activation_height();
+        st.generate_block_at(
+            tip,
+            BlockHash([0; 32]),
+            &[FakeCompactOutput::new(
+                &dfvk,
+                AddressType::DefaultExternal,
+                Zatoshis::const_from_u64(10_000),
+            )],
+            0,
+            0,
+            0,
+            false,
+        );
+        st.scan_cached_blocks(tip, 1);
+
+        let txid = TxId::from_bytes([3; 32]);
+        st.wallet()
+            .conn()
+            .execute(
+                "INSERT INTO transactions (txid, expiry_height, raw, min_observed_height)
+                 VALUES (:txid, 0, :raw, :min_observed_height)",
+                named_params![
+                    ":txid": txid.as_ref(),
+                    ":raw": raw_v1_zero_expiry_tx(),
+                    ":min_observed_height": u32::from(tip),
+                ],
+            )
+            .unwrap();
+
+        let chain_tip = chain_tip_height(st.wallet().conn())
+            .unwrap()
+            .expect("chain tip is known");
+        let (height, tx) = get_transaction(st.wallet().conn(), st.network(), txid)
+            .unwrap()
+            .expect("transaction is present");
+        assert_eq!(height, chain_tip);
+        assert_eq!(tx.expiry_height(), BlockHeight::from(0));
     }
 
     #[test]
@@ -7520,5 +8022,217 @@ mod tests {
             !is_change(&tx, pool),
             "an external-scope note must not be reclassified as change"
         );
+    }
+
+    /// A ZIP 318 classification write must name a transaction that exists.
+    ///
+    /// `UPDATE ... WHERE id_tx = ?` matching no row is not a SQLite error, so without an explicit
+    /// row-count check this reports success having written nothing. That failure is invisible
+    /// afterwards: the transaction reads as the "not classified" default, which is exactly the
+    /// value a transaction nothing ever looked at reads as. The whole point of that code being a
+    /// real value rather than NULL is to keep "we never looked" distinct from "we looked and it is
+    /// not a migration transaction", and a silently dropped write collapses the two.
+    #[test]
+    fn put_zip318_classification_rejects_an_unknown_transaction() {
+        // Placeholders for columns this never reads; they exist to satisfy the table's NOT NULL
+        // constraints, so any well-formed value will do.
+        const TXID: [u8; 32] = [7; 32];
+        const OBSERVED_HEIGHT: i64 = 0;
+
+        const PRESENT: i64 = 1;
+        /// A row id no transaction has, standing in for a `TxRef` that has outlived its row.
+        const ABSENT: i64 = 404;
+
+        let mut st = TestBuilder::new()
+            .with_data_store_factory(TestDbFactory::default())
+            .with_account_from_sapling_activation(BlockHash([0; 32]))
+            .build();
+        let conn = st.wallet_mut().conn_mut();
+        conn.execute(
+            "INSERT INTO transactions (id_tx, txid, min_observed_height)
+             VALUES (:id_tx, :txid, :min_observed_height)",
+            named_params! {
+                ":id_tx": PRESENT,
+                ":txid": &TXID[..],
+                ":min_observed_height": OBSERVED_HEIGHT,
+            },
+        )
+        .unwrap();
+
+        let classification = Zip318Classification::Conforms(Zip318TxKind::Transfer);
+
+        // Control: naming a row that exists writes it, so the rejection below is about the missing
+        // row and not about the write path being broken outright.
+        put_zip318_classification(conn, TxRef(PRESENT), classification).unwrap();
+        let stored: i64 = conn
+            .query_row(
+                "SELECT zip318_kind FROM transactions WHERE id_tx = :id_tx",
+                named_params! { ":id_tx": PRESENT },
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            stored,
+            classification.to_code(),
+            "naming an existing transaction records the classification",
+        );
+
+        // Re-classifying a transaction that is ALREADY classified must remain allowed, and this is
+        // the case the row-count check is most at risk of breaking. Both writers into this column
+        // legitimately run over the same row: proving classifies a migration transaction when it
+        // stores it, and the enhance path re-derives the same answer once it mines. A check that
+        // counted rows whose value actually changed rather than rows matched would reject that
+        // second, identical write as if it had named a missing transaction.
+        put_zip318_classification(conn, TxRef(PRESENT), classification)
+            .expect("re-writing an unchanged classification is not a missing row");
+
+        // The same holds when the value does change, which is what a re-classification looks like
+        // when the later writer has strictly more evidence than the earlier one.
+        let refined = Zip318Classification::Nonconforming;
+        put_zip318_classification(conn, TxRef(PRESENT), refined)
+            .expect("re-writing a different classification is not a missing row");
+        let stored: i64 = conn
+            .query_row(
+                "SELECT zip318_kind FROM transactions WHERE id_tx = :id_tx",
+                named_params! { ":id_tx": PRESENT },
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            stored,
+            refined.to_code(),
+            "the later classification replaces the earlier one",
+        );
+
+        assert_matches!(
+            put_zip318_classification(conn, TxRef(ABSENT), classification),
+            Err(SqliteClientError::CorruptedData(_))
+        );
+    }
+
+    /// A transaction's outputs may be received into several of the wallet's accounts, and into
+    /// none of them. The sending account's row in `v_transactions` must report what that account
+    /// actually spent and received, once, however many recipients the transaction has.
+    ///
+    /// Account 1 spends its single note to pay account 2, account 3, and an address outside the
+    /// wallet. The subquery that counts the notes the wallet created groups them, and grouping
+    /// them by the receiving account rather than the sending one emits one row per distinct
+    /// recipient account (outputs the wallet does not receive forming a group of their own); the
+    /// outer join then multiplies every aggregate of the sending account's row by the number of
+    /// those groups. Three groups make a threefold total, which no rounding or off-by-one can
+    /// account for.
+    #[test]
+    fn v_transactions_totals_do_not_scale_with_the_recipient_account_count() {
+        let mut st = TestBuilder::new()
+            .with_data_store_factory(TestDbFactory::default())
+            .with_block_cache(BlockCache::new())
+            .build();
+
+        // Three accounts in one wallet, so that payments between them are payments the wallet
+        // sees both halves of.
+        let seed = Secret::new(vec![0u8; 32]);
+        let birthday = AccountBirthday::from_sapling_activation(st.network(), BlockHash([0; 32]));
+        let (account1, usk1) = st
+            .wallet_mut()
+            .create_account("account1", &seed, &birthday, None)
+            .unwrap();
+        let dfvk1 = SaplingPoolTester::sk_to_fvk(SaplingPoolTester::usk_to_sk(&usk1));
+        let (account2, usk2) = st
+            .wallet_mut()
+            .create_account("account2", &seed, &birthday, None)
+            .unwrap();
+        let dfvk2 = SaplingPoolTester::sk_to_fvk(SaplingPoolTester::usk_to_sk(&usk2));
+        let (account3, usk3) = st
+            .wallet_mut()
+            .create_account("account3", &seed, &birthday, None)
+            .unwrap();
+        let dfvk3 = SaplingPoolTester::sk_to_fvk(SaplingPoolTester::usk_to_sk(&usk3));
+
+        // Fund account 1 with exactly one note, so that the spent total the view reports is a
+        // value no arithmetic over several notes could coincidentally produce.
+        let note_value = Zatoshis::const_from_u64(200_000);
+        let (h, _, _) = st.generate_next_block(&dfvk1, AddressType::DefaultExternal, note_value);
+        st.scan_cached_blocks(h, 1);
+        assert_eq!(st.get_total_balance(account1), note_value);
+
+        // One transaction paying three recipients: two of the wallet's own accounts and one
+        // address the wallet does not hold. None of the three outputs is change, so all three
+        // survive into the sent-note subquery, in three distinct groups.
+        let to_account2 = Zatoshis::const_from_u64(20_000);
+        let to_account3 = Zatoshis::const_from_u64(30_000);
+        let to_external = Zatoshis::const_from_u64(40_000);
+        let external = SaplingPoolTester::sk_default_address(&SaplingPoolTester::sk(&[0xf5; 32]));
+        let request = TransactionRequest::new(vec![
+            Payment::without_memo(
+                SaplingPoolTester::fvk_default_address(&dfvk2).to_zcash_address(st.network()),
+                to_account2,
+            ),
+            Payment::without_memo(
+                SaplingPoolTester::fvk_default_address(&dfvk3).to_zcash_address(st.network()),
+                to_account3,
+            ),
+            Payment::without_memo(external.to_zcash_address(st.network()), to_external),
+        ])
+        .unwrap();
+
+        let change_strategy = single_output_change_strategy(
+            StandardFeeRule::Zip317,
+            None,
+            SaplingPoolTester::SHIELDED_PROTOCOL,
+        );
+        let input_selector = GreedyInputSelector::new();
+        let txid = st
+            .spend(
+                &input_selector,
+                &change_strategy,
+                &usk1,
+                request,
+                OvkPolicy::Sender,
+                ConfirmationsPolicy::MIN,
+            )
+            .unwrap()[0];
+
+        let (h, _) = st.generate_next_block_including(txid);
+        st.scan_cached_blocks(h, 1);
+
+        let history = st.wallet().get_tx_history().unwrap();
+        let row_for = |account| {
+            history
+                .iter()
+                .find(|tx| tx.txid() == txid && tx.account_id() == &account)
+                .unwrap_or_else(|| panic!("{account:?} has a row for the transaction"))
+        };
+        let sender = row_for(account1);
+
+        // The one funding note, counted once.
+        assert_eq!(sender.total_spent(), note_value);
+        assert_eq!(sender.spent_note_count(), 1);
+
+        // The three outputs the wallet created for a recipient address, counted once each.
+        assert_eq!(sender.sent_note_count(), 3);
+
+        // Everything the transaction did not pay out or spend on the fee returns to account 1
+        // as change, and change is all it receives.
+        let fee = sender
+            .fee_paid()
+            .expect("the wallet created the transaction");
+        let paid_out = (to_account2 + to_account3 + to_external + fee).unwrap();
+        assert!(sender.has_change());
+        assert_eq!(sender.received_note_count(), 0);
+        assert_eq!(
+            sender.total_received(),
+            (note_value - paid_out).unwrap(),
+            "the change returned to the sending account, counted once",
+        );
+        assert_eq!(sender.account_value_delta(), -ZatBalance::from(paid_out));
+
+        // The recipient accounts' own rows are unaffected: each spent nothing and received the
+        // payment made to it.
+        for (account, paid) in [(account2, to_account2), (account3, to_account3)] {
+            let recipient = row_for(account);
+            assert_eq!(recipient.total_spent(), Zatoshis::ZERO);
+            assert_eq!(recipient.total_received(), paid);
+            assert_eq!(recipient.received_note_count(), 1);
+        }
     }
 }

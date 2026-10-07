@@ -53,6 +53,8 @@ use zcash_protocol::constants::{
 
 #[cfg(feature = "zsa")]
 pub(crate) use orchard::issuance::IssueBundle;
+#[cfg(zcash_unstable = "nutachyon")]
+use zcash_protocol::constants::{V7_TX_VERSION, V7_VERSION_GROUP_ID};
 #[cfg(feature = "zsa")]
 use {crate::transaction::components::issuance, orchard::zsa::OrchardZSADomain};
 
@@ -246,6 +248,11 @@ pub enum TxVersion {
     V5,
     /// Transaction version 6, specified in [ZIP 229](https://zips.z.cash/zip-0229).
     V6,
+    /// Transaction version 7, introduced by the NuTachyon network upgrade.
+    ///
+    /// V7 initially has the same fields and digest structure as V6.
+    #[cfg(zcash_unstable = "nutachyon")]
+    V7,
 }
 
 impl TxVersion {
@@ -262,6 +269,8 @@ impl TxVersion {
                 (V6_TX_VERSION, V6_VERSION_GROUP_ID) | (V6_TX_VERSION, ZSA_V6_VERSION_GROUP_ID) => {
                     Ok(TxVersion::V6)
                 }
+                #[cfg(zcash_unstable = "nutachyon")]
+                (V7_TX_VERSION, V7_VERSION_GROUP_ID) => Ok(TxVersion::V7),
                 _ => Err(io::Error::new(
                     io::ErrorKind::InvalidData,
                     "Unknown transaction format",
@@ -291,6 +300,8 @@ impl TxVersion {
                 TxVersion::V4 => V4_TX_VERSION,
                 TxVersion::V5 => V5_TX_VERSION,
                 TxVersion::V6 => V6_TX_VERSION,
+                #[cfg(zcash_unstable = "nutachyon")]
+                TxVersion::V7 => V7_TX_VERSION,
             }
     }
 
@@ -304,6 +315,8 @@ impl TxVersion {
                 BranchId::Zsa => ZSA_V6_VERSION_GROUP_ID,
                 _ => V6_VERSION_GROUP_ID,
             },
+            #[cfg(zcash_unstable = "nutachyon")]
+            TxVersion::V7 => V7_VERSION_GROUP_ID,
         }
     }
 
@@ -322,6 +335,8 @@ impl TxVersion {
             TxVersion::V3 | TxVersion::V4 => true,
             TxVersion::V5 => false,
             TxVersion::V6 => false,
+            #[cfg(zcash_unstable = "nutachyon")]
+            TxVersion::V7 => false,
         }
     }
 
@@ -336,6 +351,8 @@ impl TxVersion {
             TxVersion::V4 => true,
             TxVersion::V5 => true,
             TxVersion::V6 => true,
+            #[cfg(zcash_unstable = "nutachyon")]
+            TxVersion::V7 => true,
         }
     }
 
@@ -345,6 +362,8 @@ impl TxVersion {
             TxVersion::Sprout(_) | TxVersion::V3 | TxVersion::V4 => false,
             TxVersion::V5 => true,
             TxVersion::V6 => true,
+            #[cfg(zcash_unstable = "nutachyon")]
+            TxVersion::V7 => true,
         }
     }
 
@@ -353,15 +372,14 @@ impl TxVersion {
         match self {
             TxVersion::Sprout(_) | TxVersion::V3 | TxVersion::V4 | TxVersion::V5 => false,
             TxVersion::V6 => true,
+            #[cfg(zcash_unstable = "nutachyon")]
+            TxVersion::V7 => true,
         }
     }
 
     #[cfg(feature = "zip-233")]
-    pub fn has_zip233(&self) -> bool {
-        match self {
-            TxVersion::Sprout(_) | TxVersion::V3 | TxVersion::V4 | TxVersion::V5 => false,
-            TxVersion::V6 => true,
-        }
+    pub fn has_zip233(&self, consensus_branch_id: BranchId) -> bool {
+        *self == TxVersion::V6 && consensus_branch_id == BranchId::Zsa
     }
 
     /// Suggests the transaction version that should be used in the given Zcash epoch.
@@ -378,6 +396,9 @@ impl TxVersion {
             BranchId::Nu6_2 => TxVersion::V5,
             BranchId::Nu6_3 => TxVersion::V6,
             BranchId::Zsa => TxVersion::V6,
+            BranchId::Nu7 => TxVersion::V6,
+            #[cfg(zcash_unstable = "nutachyon")]
+            BranchId::NuTachyon => TxVersion::V7,
         }
     }
 
@@ -394,19 +415,30 @@ impl TxVersion {
                 Sapling | Blossom | Heartwood | Canopy | Nu5 | Nu6 | Nu6_1 | Nu6_2 => true,
                 Nu6_3 => true,
                 Zsa => false, // ZIP 2003
+                Nu7 => false, // ZIP 2003
+                #[cfg(zcash_unstable = "nutachyon")]
+                NuTachyon => false,
             },
             TxVersion::V5 => match consensus_branch_id {
                 Sprout | Overwinter | Sapling | Blossom | Heartwood | Canopy => false,
                 Nu5 | Nu6 | Nu6_1 | Nu6_2 => true,
                 Nu6_3 => true,
                 Zsa => true,
+                Nu7 => true,
+                #[cfg(zcash_unstable = "nutachyon")]
+                NuTachyon => true,
             },
             TxVersion::V6 => match consensus_branch_id {
                 Sprout | Overwinter | Sapling | Blossom | Heartwood | Canopy | Nu5 | Nu6
                 | Nu6_1 | Nu6_2 => false,
                 Nu6_3 => true, // Ironwood / NU6.3
                 Zsa => true,   // ZIP 230 or ZIP 248, whichever is chosen for activation
+                Nu7 => true,   // NU7 retains the existing v6 transaction format.
+                #[cfg(zcash_unstable = "nutachyon")]
+                NuTachyon => true,
             },
+            #[cfg(zcash_unstable = "nutachyon")]
+            TxVersion::V7 => consensus_branch_id == NuTachyon,
         }
     }
 }
@@ -578,6 +610,34 @@ impl<A: Authorization> TransactionData<A> {
         }
     }
 
+    /// Constructs transaction data with an experimental ZIP 233 amount.
+    /// Official transaction formats reject nonzero amounts when frozen.
+    #[cfg(all(feature = "zip-233", zcash_unstable = "zip233"))]
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_parts_with_zip233(
+        version: TxVersion,
+        consensus_branch_id: BranchId,
+        lock_time: u32,
+        expiry_height: BlockHeight,
+        zip233_amount: Zatoshis,
+        transparent_bundle: Option<transparent::Bundle<A::TransparentAuth>>,
+        sprout_bundle: Option<sprout::Bundle>,
+        sapling_bundle: Option<sapling::Bundle<A::SaplingAuth, ZatBalance>>,
+        orchard_bundle: Option<orchard::Bundle<A::OrchardAuth, ZatBalance>>,
+    ) -> Self {
+        Self::from_parts(
+            version,
+            consensus_branch_id,
+            lock_time,
+            expiry_height,
+            zip233_amount,
+            transparent_bundle,
+            sprout_bundle,
+            sapling_bundle,
+            orchard_bundle,
+        )
+    }
+
     /// Constructs a V6 [`TransactionData`] from its constituent parts,
     /// including the Ironwood bundle.
     ///
@@ -601,8 +661,165 @@ impl<A: Authorization> TransactionData<A> {
         orchard_bundle: Option<orchard::Bundle<A::OrchardAuth, ZatBalance>>,
         ironwood_bundle: Option<orchard::Bundle<A::OrchardAuth, ZatBalance>>,
     ) -> Self {
+        Self::from_parts_v6_or_v7(
+            TxVersion::V6,
+            consensus_branch_id,
+            lock_time,
+            expiry_height,
+            #[cfg(feature = "zip-233")]
+            zip233_amount,
+            transparent_bundle,
+            sapling_bundle,
+            orchard_bundle,
+            ironwood_bundle,
+        )
+    }
+
+    /// Constructs a V6 [`TransactionData`] containing a ZIP 233 amount.
+    ///
+    /// V6 does not support ZIP 233. [`Self::freeze`] rejects nonzero amounts when
+    /// this data is authorized; zero is equivalent to [`Self::from_parts_v6`].
+    #[cfg(all(feature = "zip-233", zcash_unstable = "zip233"))]
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_parts_v6_with_zip233(
+        consensus_branch_id: BranchId,
+        lock_time: u32,
+        expiry_height: BlockHeight,
+        zip233_amount: Zatoshis,
+        transparent_bundle: Option<transparent::Bundle<A::TransparentAuth>>,
+        sapling_bundle: Option<sapling::Bundle<A::SaplingAuth, ZatBalance>>,
+        orchard_bundle: Option<orchard::Bundle<A::OrchardAuth, ZatBalance>>,
+        ironwood_bundle: Option<orchard::Bundle<A::OrchardAuth, ZatBalance>>,
+    ) -> Self {
+        Self::from_parts_v6_or_v7_with_zip233(
+            TxVersion::V6,
+            consensus_branch_id,
+            lock_time,
+            expiry_height,
+            zip233_amount,
+            transparent_bundle,
+            sapling_bundle,
+            orchard_bundle,
+            ironwood_bundle,
+        )
+    }
+
+    /// Constructs a V7 [`TransactionData`] from the fields it currently shares with V6.
+    #[cfg(zcash_unstable = "nutachyon")]
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_parts_v7(
+        consensus_branch_id: BranchId,
+        lock_time: u32,
+        expiry_height: BlockHeight,
+        #[cfg(feature = "zip-233")] zip233_amount: Zatoshis,
+        transparent_bundle: Option<transparent::Bundle<A::TransparentAuth>>,
+        sapling_bundle: Option<sapling::Bundle<A::SaplingAuth, ZatBalance>>,
+        orchard_bundle: Option<orchard::Bundle<A::OrchardAuth, ZatBalance>>,
+        ironwood_bundle: Option<orchard::Bundle<A::OrchardAuth, ZatBalance>>,
+    ) -> Self {
+        Self::from_parts_v6_or_v7(
+            TxVersion::V7,
+            consensus_branch_id,
+            lock_time,
+            expiry_height,
+            #[cfg(feature = "zip-233")]
+            zip233_amount,
+            transparent_bundle,
+            sapling_bundle,
+            orchard_bundle,
+            ironwood_bundle,
+        )
+    }
+
+    /// Constructs a V7 [`TransactionData`] containing a ZIP 233 amount.
+    ///
+    /// The V7 scaffold does not implement ZIP 248 value-pool deltas. Nonzero amounts
+    /// are rejected by [`Self::freeze`] when this data is authorized.
+    #[cfg(all(
+        zcash_unstable = "nutachyon",
+        feature = "zip-233",
+        zcash_unstable = "zip233"
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_parts_v7_with_zip233(
+        consensus_branch_id: BranchId,
+        lock_time: u32,
+        expiry_height: BlockHeight,
+        zip233_amount: Zatoshis,
+        transparent_bundle: Option<transparent::Bundle<A::TransparentAuth>>,
+        sapling_bundle: Option<sapling::Bundle<A::SaplingAuth, ZatBalance>>,
+        orchard_bundle: Option<orchard::Bundle<A::OrchardAuth, ZatBalance>>,
+        ironwood_bundle: Option<orchard::Bundle<A::OrchardAuth, ZatBalance>>,
+    ) -> Self {
+        Self::from_parts_v6_or_v7_with_zip233(
+            TxVersion::V7,
+            consensus_branch_id,
+            lock_time,
+            expiry_height,
+            zip233_amount,
+            transparent_bundle,
+            sapling_bundle,
+            orchard_bundle,
+            ironwood_bundle,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn from_parts_v6_or_v7(
+        version: TxVersion,
+        consensus_branch_id: BranchId,
+        lock_time: u32,
+        expiry_height: BlockHeight,
+        #[cfg(feature = "zip-233")] zip233_amount: Zatoshis,
+        transparent_bundle: Option<transparent::Bundle<A::TransparentAuth>>,
+        sapling_bundle: Option<sapling::Bundle<A::SaplingAuth, ZatBalance>>,
+        orchard_bundle: Option<orchard::Bundle<A::OrchardAuth, ZatBalance>>,
+        ironwood_bundle: Option<orchard::Bundle<A::OrchardAuth, ZatBalance>>,
+    ) -> Self {
+        debug_assert!(match version {
+            TxVersion::V6 => true,
+            #[cfg(zcash_unstable = "nutachyon")]
+            TxVersion::V7 => true,
+            _ => false,
+        });
         TransactionData {
-            version: TxVersion::V6,
+            version,
+            consensus_branch_id,
+            lock_time,
+            expiry_height,
+            #[cfg(feature = "zip-233")]
+            zip233_amount,
+            transparent_bundle,
+            sprout_bundle: None,
+            sapling_bundle,
+            orchard_bundle: orchard_bundle.map(OrchardBundle::OrchardVanilla),
+            ironwood_bundle,
+            #[cfg(feature = "zsa")]
+            issue_bundle: None,
+        }
+    }
+
+    #[cfg(all(feature = "zip-233", zcash_unstable = "zip233"))]
+    #[allow(clippy::too_many_arguments)]
+    fn from_parts_v6_or_v7_with_zip233(
+        version: TxVersion,
+        consensus_branch_id: BranchId,
+        lock_time: u32,
+        expiry_height: BlockHeight,
+        zip233_amount: Zatoshis,
+        transparent_bundle: Option<transparent::Bundle<A::TransparentAuth>>,
+        sapling_bundle: Option<sapling::Bundle<A::SaplingAuth, ZatBalance>>,
+        orchard_bundle: Option<orchard::Bundle<A::OrchardAuth, ZatBalance>>,
+        ironwood_bundle: Option<orchard::Bundle<A::OrchardAuth, ZatBalance>>,
+    ) -> Self {
+        debug_assert!(match version {
+            TxVersion::V6 => true,
+            #[cfg(zcash_unstable = "nutachyon")]
+            TxVersion::V7 => true,
+            _ => false,
+        });
+        TransactionData {
+            version,
             consensus_branch_id,
             lock_time,
             expiry_height,
@@ -748,7 +965,7 @@ impl<A: Authorization> TransactionData<A> {
 
     /// Computes this transaction's digest using the provided digest strategy.
     ///
-    /// Version 6 transactions include the Ironwood bundle digest as a separate
+    /// V6 and later transactions include the Ironwood bundle digest as a separate
     /// Orchard-shaped digest with Ironwood personalization. Earlier transaction
     /// versions do not include Ironwood in their digest.
     pub fn digest<D: TransactionDigest<A>>(&self, digester: D) -> D::Digest {
@@ -983,7 +1200,24 @@ impl<A: Authorization> TransactionData<A> {
 }
 
 impl TransactionData<Authorized> {
+    /// Constructs an authorized transaction and computes its transaction ID.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the transaction cannot be serialized, or if it contains a
+    /// nonzero ZIP 233 amount under a transaction version and consensus branch that do
+    /// not support ZIP 233.
     pub fn freeze(self) -> io::Result<Transaction> {
+        #[cfg(feature = "zip-233")]
+        if self.zip233_amount != Zatoshis::ZERO
+            && !self.version.has_zip233(self.consensus_branch_id)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "nonzero ZIP 233 amount is not supported by the transaction version and consensus branch",
+            ));
+        }
+
         Transaction::from_data(self)
     }
 }
@@ -1002,6 +1236,8 @@ impl Transaction {
             TxVersion::Sprout(_) | TxVersion::V3 | TxVersion::V4 => Self::from_data_v4(data),
             TxVersion::V5 => Ok(Self::from_data_v5(data)),
             TxVersion::V6 => Ok(Self::from_data_v6(data)),
+            #[cfg(zcash_unstable = "nutachyon")]
+            TxVersion::V7 => Ok(Self::from_data_v6(data)),
         }
     }
 
@@ -1079,6 +1315,12 @@ impl Transaction {
                 }
                 #[cfg(not(feature = "zsa"))]
                 Self::read_v6_from_header(base_reader, version, header_fragment)
+            }
+            #[cfg(zcash_unstable = "nutachyon")]
+            TxVersion::V7 => {
+                let mut reader = reader.into_base_reader();
+                let header_fragment = Self::read_v6_header_fragment(&mut reader)?;
+                Self::read_v6_from_header(reader, version, header_fragment)
             }
         }
     }
@@ -1381,6 +1623,8 @@ impl Transaction {
                     self.write_v6(writer)
                 }
             }
+            #[cfg(zcash_unstable = "nutachyon")]
+            TxVersion::V7 => self.write_v6(writer),
         }
     }
 
@@ -1461,7 +1705,7 @@ impl Transaction {
         if self.sprout_bundle.is_some() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "Sprout components cannot be present when serializing to the V6 transaction format.",
+                "Sprout components cannot be present when serializing to V6 or later transaction formats.",
             ));
         }
         self.write_v6_header(&mut writer)?;
@@ -1587,6 +1831,8 @@ pub trait TransactionDigest<A: Authorization> {
 
     type Digest;
 
+    /// Digests the canonical version, version-group ID, branch ID, lock time, and expiry
+    /// height. ZIP 233 is not a header field in any implemented transaction format.
     fn digest_header(
         &self,
         version: TxVersion,
@@ -1684,6 +1930,9 @@ pub mod testing {
             BranchId::Nu6_2 => Just(TxVersion::V5).boxed(),
             BranchId::Nu6_3 => Just(TxVersion::V6).boxed(),
             BranchId::Zsa => Just(TxVersion::V6).boxed(),
+            BranchId::Nu7 => Just(TxVersion::V6).boxed(),
+            #[cfg(zcash_unstable = "nutachyon")]
+            BranchId::NuTachyon => Just(TxVersion::V7).boxed(),
         }
     }
 

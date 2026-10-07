@@ -38,7 +38,7 @@ use zcash_protocol::consensus::BlockHeight;
 use zcash_protocol::local_consensus::LocalNetwork;
 use zcash_protocol::value::Zatoshis;
 
-use zcash_pool_migration::build::{AccountDerivation, sign_pczt};
+use zcash_pool_migration::build::AccountDerivation;
 use zcash_pool_migration::engine::{
     MigrationBackend, MigrationCrypto, MigrationState, MigrationTransaction, MigrationTransferId,
     MigrationTxState, PoolMigrationRead, PoolMigrationWrite, ProvedTransaction,
@@ -103,6 +103,9 @@ pub fn regtest_network(nu6_3_active: bool) -> LocalNetwork {
         nu6_3,
         zsa: None,
         orchard_mode: zcash_protocol::consensus::OrchardMode::Normal,
+        nu7: None,
+        #[cfg(zcash_unstable = "nutachyon")]
+        nu_tachyon: None,
     }
 }
 
@@ -350,7 +353,8 @@ impl PoolMigrationRead for MockBackend {
     type Error = core::convert::Infallible;
 
     fn get_migration(&self) -> Result<Option<MigrationState>, Self::Error> {
-        Ok(self.stored.clone())
+        // Pending-only, per the trait contract: a terminal state is history.
+        Ok(self.stored.clone().filter(|s| !s.is_terminal()))
     }
 
     fn check_step_satisfiability(
@@ -422,7 +426,10 @@ pub struct CommitMock {
     pub wallet_notes: Vec<Note>,
     /// The account's Orchard full viewing key.
     pub fvk: FullViewingKey,
-    /// The account's Orchard spend-authorizing key, used to sign the migration PCZTs.
+    /// The account's Orchard spend-authorizing key. The mock does NOT sign with it: the engine
+    /// takes the spend authority as an argument to the calls that sign, so a test passes this to
+    /// `commit_preparation` / `rebuild_expired_transfer` (and uses it to play the external signer)
+    /// rather than the backend signing on its own behalf.
     pub ask: SpendAuthorizingKey,
     /// The ZIP 32 account the notes belong to, as a seeded wallet would report it. `None` models a
     /// wallet that knows no derivation for the account (an imported viewing key).
@@ -508,7 +515,8 @@ impl PoolMigrationRead for CommitMock {
     type Error = core::convert::Infallible;
 
     fn get_migration(&self) -> Result<Option<MigrationState>, Self::Error> {
-        Ok(self.stored.clone())
+        // Pending-only, per the trait contract: a terminal state is history.
+        Ok(self.stored.clone().filter(|s| !s.is_terminal()))
     }
 
     fn check_step_satisfiability(
@@ -568,8 +576,8 @@ impl PoolMigrationWrite for CommitMock {
 impl MigrationCrypto for CommitMock {
     type Error = core::convert::Infallible;
 
-    fn orchard_fvk(&self) -> Result<FullViewingKey, Self::Error> {
-        Ok(self.fvk.clone())
+    fn orchard_fvk(&self) -> Option<&FullViewingKey> {
+        Some(&self.fvk)
     }
 
     fn account_derivation(&self) -> Result<Option<AccountDerivation>, Self::Error> {
@@ -578,9 +586,5 @@ impl MigrationCrypto for CommitMock {
 
     fn resolve_wallet_note(&self, index: usize) -> Result<Note, Self::Error> {
         Ok(self.wallet_notes[index])
-    }
-
-    fn sign(&self, pczt: pczt::Pczt) -> Result<pczt::Pczt, Self::Error> {
-        Ok(sign_pczt(pczt, &self.ask).expect("signs the migration PCZT"))
     }
 }

@@ -16,6 +16,50 @@ workspace.
 
 ### Fixed
 - References to consensus parameters preserve their `OrchardMode`.
+### Added
+- `zcash_protocol::address` module.
+- `zcash_protocol::address::Revision`
+- `zcash_protocol::consensus::NetworkConstants`:
+  - `fn hrp_unified_address_r2`
+  - `fn hrp_unified_address_r2_ti`
+  - `fn hrp_unified_fvk_r2`
+  - `fn hrp_unified_ivk_r2`
+- HRP constants for ZIP 316 Revision 2 unified encodings added to
+  `zcash_protocol::constants::{mainnet, testnet, regtest}`. HRPs
+  for transparent-including UAs have the `TI` suffix.
+- Experimental NuTachyon support behind `zcash_unstable="nutachyon"`, including
+  its network upgrade, consensus branch ID, local-consensus activation parameter,
+  and V7 transaction format constants.
+- `zcash_protocol::consensus::{NetworkUpgrade::Nu7, BranchId::Nu7}` and
+  `zcash_protocol::local_consensus::LocalNetwork::nu7` are now available
+  without the `--cfg zcash_unstable="nu7"` configuration flag. Mainnet and
+  Testnet have no NU7 activation height, so `BranchId::for_height` returns
+  `BranchId::Nu7` only for a `LocalNetwork` or other `Parameters`
+  implementation that sets one.
+
+### Changed
+- `BranchId::height_bounds` and `height_range` now match `for_height` for local
+  schedules with skipped or out-of-order upgrades.
+- `BranchId::Nu7` now maps to and from the consensus branch ID `0x77190AD9`
+  (was the placeholder `0xFFFFFFFF`).
+
+## [0.10.6] - 2026-09-04
+
+### Added
+- Experimental NuTachyon support. Every item listed here is available **only**
+  under the `--cfg zcash_unstable="nutachyon"` configuration flag, and is absent
+  from a default build:
+  - `zcash_protocol::constants::{V7_TX_VERSION, V7_VERSION_GROUP_ID}`
+  - `zcash_protocol::consensus::{NetworkUpgrade::NuTachyon, BranchId::NuTachyon}`
+  - `zcash_protocol::local_consensus::LocalNetwork::nu_tachyon`
+
+## [0.10.5] - 2026-08-18
+
+### Added
+- `TxId::as_hex`, an encoder producing the canonical byte-reversed display
+  form previously only available via `TxId`'s `Display` impl.
+- `TxId::from_hex`, parsing the canonical (byte-reversed) hexadecimal display
+  form produced by `TxId`'s `Display` impl.
 
 ## [0.10.4] - 2026-08-03
 

@@ -157,7 +157,7 @@ impl Key {
     /// Derives the secp256k1 public key corresponding to the secret key,
     /// using the provided secp context.
     pub fn pubkey_with_context<C: Signing>(&self, secp: &Secp256k1<C>) -> PublicKey {
-        self.secret.public_key(secp)
+        self.secret.public_key()
     }
 
     /// Generates the "openssh-inspired" DER encoding of the secret key used by zcashd.
@@ -178,7 +178,7 @@ impl Key {
         //        *seckeylen = 0;
         //        return 0;
         //    }
-        let keypair = self.secret().keypair(secp);
+        let keypair = self.secret().keypair();
 
         if self.compressed {
             let begin = [0x30, 0x81, 0xD3, 0x02, 0x01, 0x01, 0x04, 0x20];

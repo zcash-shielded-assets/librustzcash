@@ -44,7 +44,7 @@ pub const MIGRATION_ID: Uuid = Uuid::from_u128(0x3d4f12d6_3da9_4ace_ac65_a0dd0a7
 // depending on it is sufficient to ensure the table is in its final form (including the
 // `cached_transparent_receiver_address` column) before this index is created. No later migration
 // modifies the `addresses` table, so the index will not be dropped by a subsequent table rebuild.
-const DEPENDENCIES: &[Uuid] = &[standalone_p2sh::MIGRATION_ID];
+pub(super) const DEPENDENCIES: &[Uuid] = &[standalone_p2sh::MIGRATION_ID];
 
 pub(super) struct Migration<P> {
     pub(super) params: P,
@@ -94,7 +94,7 @@ fn record_derives_receiver<P: consensus::Parameters>(
     let account_pubkey = |ufvk: &str| {
         UnifiedFullViewingKey::decode(params, ufvk)
             .ok()
-            .and_then(|k| k.transparent().cloned())
+            .and_then(|k| k.p2pkh().cloned())
     };
 
     let derived = match record.key_scope {
@@ -110,8 +110,7 @@ fn record_derives_receiver<P: consensus::Parameters>(
                 UnifiedIncomingViewingKey::decode(params, &record.uivk)
                     .ok()
                     .and_then(|k| {
-                        k.transparent()
-                            .as_ref()
+                        k.p2pkh()
                             .and_then(|ivk| ivk.derive_address(idx).ok())
                     })
             }),
@@ -384,7 +383,7 @@ mod tests {
         )
         .unwrap();
         usk.to_unified_full_viewing_key()
-            .transparent()
+            .p2pkh()
             .unwrap()
             .derive_external_ivk()
             .unwrap()
@@ -609,7 +608,7 @@ mod tests {
         )
         .unwrap();
         usk.to_unified_full_viewing_key()
-            .transparent()
+            .p2pkh()
             .unwrap()
             .derive_ephemeral_ivk()
             .unwrap()

@@ -24,7 +24,7 @@ pub(crate) struct Migration<P: consensus::Parameters> {
     pub(super) params: P,
 }
 
-const DEPENDENCIES: &[Uuid] = &[
+pub(super) const DEPENDENCIES: &[Uuid] = &[
     receiving_key_scopes::MIGRATION_ID,
     add_account_birthdays::MIGRATION_ID,
     v_transactions_note_uniqueness::MIGRATION_ID,
@@ -184,7 +184,7 @@ impl<P: consensus::Parameters> RusqliteMigration for Migration<P> {
                     let sapling_item = ufvk_parsed.sapling().map(|k| k.to_bytes());
 
                     #[cfg(feature = "transparent-inputs")]
-                    let transparent_item = ufvk_parsed.transparent().map(|k| k.serialize());
+                    let transparent_item = ufvk_parsed.p2pkh().map(|k| k.serialize());
                     #[cfg(not(feature = "transparent-inputs"))]
                     let transparent_item: Option<Vec<u8>> = None;
 

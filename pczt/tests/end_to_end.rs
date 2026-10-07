@@ -134,7 +134,7 @@ fn transparent_to_orchard() {
         .derive_external_secret_key(address_index)
         .unwrap();
     let secp = secp256k1::Secp256k1::signing_only();
-    let transparent_pubkey = transparent_sk.public_key(&secp);
+    let transparent_pubkey = transparent_sk.public_key();
     let p2pkh_addr = TransparentAddress::from_pubkey(&transparent_pubkey);
 
     // Create an Orchard account to receive funds.
@@ -1117,7 +1117,7 @@ fn pczt_with_anchor(pool: ShieldedPool) -> Pczt {
         .derive_external_secret_key(address_index)
         .unwrap();
     let secp = secp256k1::Secp256k1::signing_only();
-    let transparent_pubkey = transparent_sk.public_key(&secp);
+    let transparent_pubkey = transparent_sk.public_key();
 
     let orchard_sk = orchard::keys::SpendingKey::from_bytes([0; 32]).unwrap();
     let orchard_fvk = orchard::keys::FullViewingKey::from(&orchard_sk);
@@ -1549,6 +1549,9 @@ fn pre_nu6_3_test_network() -> zcash_protocol::local_consensus::LocalNetwork {
         nu6_3: None,
         zsa: None,
         orchard_mode: zcash_protocol::consensus::OrchardMode::Normal,
+        nu7: None,
+        #[cfg(zcash_unstable = "nutachyon")]
+        nu_tachyon: None,
     }
 }
 
@@ -1567,6 +1570,9 @@ fn nu6_3_test_network() -> zcash_protocol::local_consensus::LocalNetwork {
         nu6_3: Some(BlockHeight::from_u32(10)),
         zsa: None,
         orchard_mode: zcash_protocol::consensus::OrchardMode::Normal,
+        nu7: None,
+        #[cfg(zcash_unstable = "nutachyon")]
+        nu_tachyon: None,
     }
 }
 

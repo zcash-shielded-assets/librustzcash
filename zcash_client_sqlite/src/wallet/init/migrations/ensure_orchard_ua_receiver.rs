@@ -16,7 +16,7 @@ use crate::{UA_ORCHARD, UA_TRANSPARENT, wallet::init::WalletMigrationError};
 /// This migration ensures that an Orchard receiver exists in the wallet's default Unified address.
 pub const MIGRATION_ID: Uuid = Uuid::from_u128(0x604349c7_5ce5_4768_bea6_12d106ccda93);
 
-const DEPENDENCIES: &[Uuid] = &[orchard_received_notes::MIGRATION_ID];
+pub(super) const DEPENDENCIES: &[Uuid] = &[orchard_received_notes::MIGRATION_ID];
 
 pub(super) struct Migration<P> {
     pub(super) params: P,
@@ -73,7 +73,7 @@ impl<P: consensus::Parameters> RusqliteMigration for Migration<P> {
             let mut di_be = *diversifier_index.as_bytes();
             di_be.reverse();
             update_address.execute(named_params![
-                ":address": default_addr.encode(&self.params),
+                ":address": default_addr.encode_receiver_preserving(&self.params),
                 ":account_id": account_id,
                 ":j": &di_be[..],
             ])?;
@@ -165,7 +165,7 @@ mod tests {
                 named_params![
                     ":account_id": account_id,
                     ":j": &di_be[..],
-                    ":address": addr.encode(&db_data.params)
+                    ":address": addr.encode_receiver_preserving(&db_data.params)
                 ],
             )
             .unwrap();

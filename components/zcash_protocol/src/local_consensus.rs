@@ -33,6 +33,9 @@ use crate::consensus::{BlockHeight, NetworkType, NetworkUpgrade, OrchardMode, Pa
 ///         nu6_3: Some(BlockHeight::from_u32(1)),
 ///         zsa: Some(BlockHeight::from_u32(1)),
 ///         orchard_mode: OrchardMode::Zsa,
+///         nu7: Some(BlockHeight::from_u32(1)),
+///         #[cfg(zcash_unstable = "nutachyon")]
+///         nu_tachyon: Some(BlockHeight::from_u32(1)),
 ///     };
 ///     ```
 ///
@@ -52,6 +55,10 @@ pub struct LocalNetwork {
     pub zsa: Option<BlockHeight>,
     /// The Orchard protocol variant for this network.
     pub orchard_mode: OrchardMode,
+    /// The NU7 activation height for this network, or `None` if NU7 never activates.
+    pub nu7: Option<BlockHeight>,
+    #[cfg(zcash_unstable = "nutachyon")]
+    pub nu_tachyon: Option<BlockHeight>,
 }
 
 /// Parameters implementation for `LocalNetwork`
@@ -73,6 +80,9 @@ impl Parameters for LocalNetwork {
             NetworkUpgrade::Nu6_2 => self.nu6_2,
             NetworkUpgrade::Nu6_3 => self.nu6_3,
             NetworkUpgrade::Zsa => self.zsa,
+            NetworkUpgrade::Nu7 => self.nu7,
+            #[cfg(zcash_unstable = "nutachyon")]
+            NetworkUpgrade::NuTachyon => self.nu_tachyon,
         }
     }
 
@@ -106,6 +116,9 @@ mod tests {
             nu6_2: None,
             nu6_3: None,
             zsa: Some(BlockHeight::from_u32(1)),
+            nu7: None,
+            #[cfg(zcash_unstable = "nutachyon")]
+            nu_tachyon: None,
             orchard_mode: OrchardMode::Zsa,
         };
         fn mode<P: Parameters>(params: P) -> OrchardMode {
@@ -135,6 +148,8 @@ mod tests {
         let expected_nu6_2 = BlockHeight::from_u32(9);
         let expected_nu6_3 = BlockHeight::from_u32(10);
         let expected_nu7 = BlockHeight::from_u32(11);
+        #[cfg(zcash_unstable = "nutachyon")]
+        let expected_nu_tachyon = BlockHeight::from_u32(12);
 
         let regtest = LocalNetwork {
             overwinter: Some(expected_overwinter),
@@ -149,6 +164,9 @@ mod tests {
             nu6_3: Some(expected_nu6_3),
             zsa: Some(expected_nu7),
             orchard_mode: OrchardMode::Normal,
+            nu7: Some(expected_nu7),
+            #[cfg(zcash_unstable = "nutachyon")]
+            nu_tachyon: Some(expected_nu_tachyon),
         };
 
         assert!(regtest.is_nu_active(NetworkUpgrade::Overwinter, expected_overwinter));
@@ -163,6 +181,12 @@ mod tests {
         assert!(regtest.is_nu_active(NetworkUpgrade::Nu6_3, expected_nu6_3));
         // nu7 must not be activated at or below the nu6_3 height
         assert!(!regtest.is_nu_active(NetworkUpgrade::Zsa, expected_nu6_3));
+        assert!(!regtest.is_nu_active(NetworkUpgrade::Nu7, expected_nu6_3));
+        #[cfg(zcash_unstable = "nutachyon")]
+        {
+            assert!(!regtest.is_nu_active(NetworkUpgrade::NuTachyon, expected_nu6_3));
+            assert!(regtest.is_nu_active(NetworkUpgrade::NuTachyon, expected_nu_tachyon));
+        }
     }
 
     #[test]
@@ -178,6 +202,8 @@ mod tests {
         let expected_nu6_2 = BlockHeight::from_u32(9);
         let expected_nu6_3 = BlockHeight::from_u32(10);
         let expected_nu7 = BlockHeight::from_u32(11);
+        #[cfg(zcash_unstable = "nutachyon")]
+        let expected_nu_tachyon = BlockHeight::from_u32(12);
 
         let regtest = LocalNetwork {
             overwinter: Some(expected_overwinter),
@@ -192,6 +218,9 @@ mod tests {
             nu6_3: Some(expected_nu6_3),
             zsa: Some(expected_nu7),
             orchard_mode: OrchardMode::Normal,
+            nu7: Some(expected_nu7),
+            #[cfg(zcash_unstable = "nutachyon")]
+            nu_tachyon: Some(expected_nu_tachyon),
         };
 
         assert_eq!(
@@ -238,6 +267,11 @@ mod tests {
             regtest.activation_height(NetworkUpgrade::Zsa),
             Some(expected_nu7)
         );
+        #[cfg(zcash_unstable = "nutachyon")]
+        assert_eq!(
+            regtest.activation_height(NetworkUpgrade::NuTachyon),
+            Some(expected_nu_tachyon)
+        );
     }
 
     #[test]
@@ -253,6 +287,8 @@ mod tests {
         let expected_nu6_2 = BlockHeight::from_u32(9);
         let expected_nu6_3 = BlockHeight::from_u32(10);
         let expected_nu7 = BlockHeight::from_u32(11);
+        #[cfg(zcash_unstable = "nutachyon")]
+        let expected_nu_tachyon = BlockHeight::from_u32(12);
 
         let regtest = LocalNetwork {
             overwinter: Some(expected_overwinter),
@@ -267,6 +303,9 @@ mod tests {
             nu6_3: Some(expected_nu6_3),
             zsa: Some(expected_nu7),
             orchard_mode: OrchardMode::Normal,
+            nu7: Some(expected_nu7),
+            #[cfg(zcash_unstable = "nutachyon")]
+            nu_tachyon: Some(expected_nu_tachyon),
         };
 
         assert_eq!(regtest.coin_type(), constants::regtest::COIN_TYPE);

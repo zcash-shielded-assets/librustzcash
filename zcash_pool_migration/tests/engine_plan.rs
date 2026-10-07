@@ -14,7 +14,9 @@ use zcash_protocol::TxId;
 use zcash_protocol::consensus::BlockHeight;
 use zcash_protocol::value::{COIN, Zatoshis};
 
-use zcash_pool_migration::denomination::{DenominationPlan, plan_denominations};
+use zcash_pool_migration::denomination::{
+    DenominationPlan, MIGRATION_MAX_PREPARED_NOTES_PER_RUN, plan_denominations,
+};
 use zcash_pool_migration::engine::{
     MigrationBackend, MigrationError, MigrationState, MigrationStatus, MigrationTransaction,
     MigrationTransferId, MigrationTxKind, MigrationTxState, PoolMigrationRead, PoolMigrationWrite,
@@ -25,6 +27,8 @@ use zcash_pool_migration::preparation::{
 };
 use zcash_pool_migration::satisfiability::ReplanThreshold;
 use zcash_pool_migration::scheduling::AnchorBucketInterval;
+#[cfg(feature = "test-dependencies")]
+use zcash_pool_migration::testing::{MIGRATION_SCENARIOS, NOTE_SHAPE_SPLITS};
 use zcash_pool_migration_memory::{MockBackend, regtest_network};
 
 /// Wrap a raw zatoshi amount as [`Zatoshis`] for the tests.
@@ -148,7 +152,9 @@ fn full_migration_of_one_quantum_is_one_layer_one_transaction() {
 #[test]
 fn reconciliation_drops_the_unfundable_tail_for_a_many_equal_note_source() {
     let balance = 50 * COIN;
-    let backend = MockBackend::new(vec![5 * COIN; 10], 2_000_000); // ten equal 5-ZEC notes
+    let source_notes = vec![5 * COIN; 10]; // ten equal 5-ZEC notes
+    let source_note_count = source_notes.len();
+    let backend = MockBackend::new(source_notes, 2_000_000);
     let mut rng = ChaCha8Rng::seed_from_u64(1);
     let plan = plan_migration(&regtest_network(true), &backend, &mut rng)
         .expect("a fundable balance plans");
@@ -157,12 +163,15 @@ fn reconciliation_drops_the_unfundable_tail_for_a_many_equal_note_source() {
 
     // The baseline: the same denominations with an always-fundable preparation stub, i.e. what the
     // strategy proposes for this balance absent the equal-note source's fundability constraint.
-    // Recover the exact fees `plan_migration` used from the produced plan so the baseline matches.
+    // Recover the exact fees `plan_migration` used from the produced plan, and pass the same
+    // per-run note cap it defaults to, so the baseline matches the plan it is compared against.
     let transfer_buffer = plan.denominations().note_fee_buffer();
     let prep_tx_fee = plan.denominations().prep_fees();
     let mut ref_rng = ChaCha8Rng::seed_from_u64(1);
     let proposed = plan_denominations(
         zat(balance),
+        source_note_count,
+        MIGRATION_MAX_PREPARED_NOTES_PER_RUN,
         transfer_buffer,
         prep_tx_fee,
         &prep_tx_count_stub,
@@ -214,6 +223,61 @@ fn reconciliation_drops_the_unfundable_tail_for_a_many_equal_note_source() {
         plan_preparation(&source, &kept, prep_tx_fee).is_ok(),
         "the reconciled funding set must be preparable from the source notes"
     );
+}
+
+/// The wallet's NOTE SHAPE does not move the split of a fixed balance.
+///
+/// The crossing values are a function of the BALANCE alone (ZIP 318 canonical quantization of the
+/// migratable 9.99 ZEC is `5 + 2 + 2 + 0.5 + 0.2 + 0.2 + 0.05 + 0.02 + 0.02`), which is what makes
+/// them collide across wallets. Every funding note still has to be minted out of the wallet's
+/// actual notes, so this holds only while the preparation planner can build a transaction that
+/// spends several notes and mints several: one 10 ZEC balance held four ways, one split.
+#[cfg(feature = "test-dependencies")]
+#[test]
+fn note_shape_does_not_change_the_split_of_a_ten_zec_balance() {
+    // One hundredth of a ZEC: the minimum denomination, and the unit every crossing falls on.
+    const H: u64 = COIN / 100;
+
+    let mut migrated = Vec::new();
+    for split in NOTE_SHAPE_SPLITS {
+        let scenario = MIGRATION_SCENARIOS
+            .iter()
+            .find(|sc| sc.label == split.scenario_label)
+            .expect("every split names a scenario");
+        let backend = MockBackend::new(scenario.source_notes.to_vec(), 2_000_000);
+        let mut rng = ChaCha8Rng::seed_from_u64(1);
+        let plan = plan_migration(&regtest_network(true), &backend, &mut rng)
+            .expect("a fundable balance plans");
+        let label = scenario.label;
+
+        assert_eq!(
+            plan.crossing_values()
+                .iter()
+                .map(|&v| u64::from(v) / H)
+                .collect::<Vec<u64>>(),
+            split.crossings,
+            "{label}: crossings (in 0.01 ZEC)",
+        );
+        assert_eq!(
+            plan.preparation_tx_count(),
+            split.preparations,
+            "{label}: preparation transactions",
+        );
+
+        // Whatever the shape, the plan never spends more than the balance.
+        let balance: u64 = scenario.source_notes.iter().sum();
+        assert!(
+            u64::from(plan.value_migrated()) + u64::from(plan.residual()) <= balance,
+            "{label}: the plan cannot create value",
+        );
+        migrated.push((label, u64::from(plan.value_migrated())));
+    }
+
+    // Every shape migrates the same value: the whole canonical decomposition of the balance, with
+    // nothing stranded by how the notes happen to be held.
+    for (label, value) in &migrated {
+        assert_eq!(*value, 999 * H, "{label}: migrated value");
+    }
 }
 
 #[test]

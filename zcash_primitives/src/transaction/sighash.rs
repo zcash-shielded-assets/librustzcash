@@ -63,5 +63,7 @@ pub fn signature_hash<
             }
             v6_signature_hash(tx, signable_input, txid_parts)
         }
+        #[cfg(zcash_unstable = "nutachyon")]
+        TxVersion::V7 => v6_signature_hash(tx, signable_input, txid_parts),
     })
 }

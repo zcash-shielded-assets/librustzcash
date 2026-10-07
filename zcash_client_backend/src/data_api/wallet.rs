@@ -39,6 +39,7 @@ use rand_core::OsRng;
 use std::{
     num::NonZeroU32,
     ops::{Add, Sub},
+    time::SystemTime,
 };
 
 use shardtree::error::{QueryError, ShardTreeError};
@@ -48,7 +49,8 @@ use super::{InputSource, locking::lock_proposal_inputs};
 use crate::{
     data_api::{
         Account, MaxSpendMode, NoteCommitmentTree, SentTransaction, SentTransactionOutput,
-        WalletCommitmentTrees, WalletRead, WalletWrite, error::Error,
+        WalletCommitmentTrees, WalletRead, WalletWrite,
+        error::{AddressExpiryError, Error},
         wallet::input_selection::propose_send_max,
     },
     decrypt_transaction,
@@ -56,6 +58,7 @@ use crate::{
         ChangeStrategy, DustOutputPolicy, StandardFeeRule, standard::SingleOutputChangeStrategy,
     },
     proposal::{Proposal, ProposalError, Step, StepOutputIndex},
+    util::Clock,
     wallet::{Note, OvkPolicy, Recipient},
 };
 use sapling::{
@@ -65,12 +68,12 @@ use sapling::{
 use transparent::{address::TransparentAddress, builder::TransparentSigningSet, bundle::OutPoint};
 use zcash_address::ZcashAddress;
 use zcash_keys::{
-    address::Address,
+    address::{Address, UnifiedAddress},
     keys::{UnifiedFullViewingKey, UnifiedSpendingKey},
 };
 use zcash_primitives::transaction::{
     Transaction, TxId, TxVersion,
-    builder::{BuildConfig, BuildResult, Builder, BundlePadding},
+    builder::{BuildConfig, BuildResult, Builder, BundlePadding, DEFAULT_TX_EXPIRY_DELTA},
     components::sapling::zip212_enforcement,
     fees::FeeRule,
 };
@@ -946,6 +949,7 @@ where
             proposed_version,
         )?,
     };
+    proposal.check_transaction_size()?;
     if let Some(request) = lock_inputs {
         let lock_expiry_height = target_height + request.for_blocks();
         lock_proposal_inputs(wallet_db, &proposal, request.owner(), lock_expiry_height)?;
@@ -1257,6 +1261,8 @@ where
         )
         .map_err(Error::from)?;
 
+    proposal.check_transaction_size()?;
+
     if let Some(request) = lock_inputs {
         let lock_expiry_height = target_height + request.for_blocks();
         lock_proposal_inputs(wallet_db, &proposal, request.owner(), lock_expiry_height)?;
@@ -1432,6 +1438,7 @@ impl SpendingKeys {
 pub fn create_proposed_transactions<DbT, ParamsT, InputsErrT, FeeRuleT, ChangeErrT, N>(
     wallet_db: &mut DbT,
     params: &ParamsT,
+    clock: &impl Clock,
     spend_prover: &impl SpendProver,
     output_prover: &impl OutputProver,
     spending_keys: &SpendingKeys,
@@ -1447,6 +1454,11 @@ where
     // The transaction version is carried on the proposal, chosen when the proposal was
     // constructed; `None` builds at the version implied by the target height.
     let proposed_version = proposal.proposed_version();
+
+    // Defense-in-depth: reject oversized proposals at the build entry point, so a
+    // proposal from a third-party input selector or a deserialized proposal that
+    // bypassed the `propose_*` wrappers cannot reach the expensive proving path.
+    proposal.check_transaction_size()?;
 
     if let Some(expiry_height) = expiry_height {
         let min_target_height = BlockHeight::from(proposal.min_target_height());
@@ -1470,6 +1482,8 @@ where
         .ok_or(Error::KeyNotRecognized)?
         .id();
 
+    let now = clock.now();
+
     let mut step_results = Vec::with_capacity(proposal.steps().len());
     for step in proposal.steps() {
         let step_result: StepResult<_> = create_proposed_transaction(
@@ -1489,6 +1503,7 @@ where
             &mut unused_transparent_outputs,
             proposed_version,
             expiry_height,
+            now,
         )?;
         step_results.push((step, step_result));
     }
@@ -1504,8 +1519,7 @@ where
         }
     }
 
-    // TODO: This should be provided by a `Clock`
-    let created = time::OffsetDateTime::now_utc();
+    let created = time::OffsetDateTime::from(now);
 
     // Store the transactions only after creating all of them. This avoids undesired
     // retransmissions in case a transaction is stored and the creation of a subsequent
@@ -1674,6 +1688,59 @@ struct BuildState<P, AccountId> {
     utxos_spent: Vec<OutPoint>,
 }
 
+/// Enforces the ZIP 316 Revision 2 address expiration rules for a payment recipient: a
+/// payment must not be made to an address that is known to have expired, and when the
+/// recipient defines an expiry height, the transaction must carry a nonzero expiry
+/// height no greater than it. All recipients of a multi-recipient transaction are
+/// subject to these constraints.
+///
+/// An address that defines an expiry height is expired once the chain has advanced past
+/// that height. `min_target_height` is the next chain tip, so the tip that expiry is
+/// evaluated against is one block below it.
+fn check_recipient_expiry(
+    ua: &UnifiedAddress,
+    min_target_height: TargetHeight,
+    tx_expiry_height: Option<BlockHeight>,
+    now: SystemTime,
+) -> Result<(), AddressExpiryError> {
+    if let Some(address_expiry) = ua.expiry_height() {
+        let chain_height = min_target_height.saturating_sub(1);
+        if chain_height > address_expiry {
+            return Err(AddressExpiryError::HeightExpired {
+                address_expiry,
+                chain_height,
+            });
+        }
+
+        match tx_expiry_height {
+            None => {
+                return Err(AddressExpiryError::TransactionExpiryDisabled { address_expiry });
+            }
+            Some(transaction_expiry) if transaction_expiry > address_expiry => {
+                return Err(AddressExpiryError::ExpiryHeightConflict {
+                    address_expiry,
+                    transaction_expiry,
+                });
+            }
+            Some(_) => {}
+        }
+    }
+
+    if let Some(expiry_time) = ua.expiry_time() {
+        // A clock before the Unix epoch reads as time zero, at which no address with
+        // expiry-time metadata is expired.
+        let now_secs = now
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        if now_secs > expiry_time {
+            return Err(AddressExpiryError::TimeExpired { expiry_time });
+        }
+    }
+
+    Ok(())
+}
+
 // `unused_transparent_outputs` maps `StepOutput`s for transparent outputs
 // that have not been consumed so far, to the corresponding pair of
 // `TransparentAddress` and `Outpoint`.
@@ -1701,6 +1768,8 @@ fn build_proposed_transaction<DbT, ParamsT, InputsErrT, FeeRuleT, ChangeErrT, N>
     // Overrides the builder-derived expiry height, when set. Applied immediately after
     // `Builder::new` below, before any inputs are added or signatures/proofs are produced.
     expiry_height: Option<BlockHeight>,
+    // The current time, used to enforce recipient address expiry.
+    now: SystemTime,
 ) -> Result<
     BuildState<ParamsT, <DbT as WalletRead>::AccountId>,
     CreateErrT<DbT, InputsErrT, FeeRuleT, ChangeErrT, N>,
@@ -1950,6 +2019,15 @@ where
         builder = builder.with_expiry_height(expiry_height);
     }
 
+    // The expiry height the built transaction will carry: the caller's override (with
+    // `H0` disabling expiry), the ZIP 318 rolling expiry for a canonical crossing, or
+    // the builder's default of the target height plus `DEFAULT_TX_EXPIRY_DELTA`.
+    let tx_expiry_height = match expiry_height {
+        Some(h) if h == consensus::H0 => None,
+        Some(h) => Some(h),
+        None => Some(BlockHeight::from(min_target_height) + DEFAULT_TX_EXPIRY_DELTA),
+    };
+
     if let Some(version) = proposed_version {
         builder.propose_version(version)?;
     }
@@ -2066,7 +2144,7 @@ where
                         address_index,
                     } => {
                         let pubkey = ufvk
-                            .transparent()
+                            .p2pkh()
                             .ok_or(Error::KeyNotAvailable(PoolType::Transparent))?
                             .derive_address_pubkey(*scope, *address_index)
                             .expect("spending key derivation should not fail");
@@ -2085,6 +2163,12 @@ where
                                 .map_err(|_| ::transparent::builder::Error::UnsupportedScript)?;
                         utxos_spent.push(outpoint.clone());
                         builder.add_transparent_p2sh_input(from_chain, outpoint, txout)?;
+                    }
+                    // An address imported without key material cannot construct a spend: the
+                    // wallet holds neither the pubkey nor the redeem script for the input.
+                    #[cfg(feature = "transparent-key-import")]
+                    TransparentAddressSource::StandaloneAddress => {
+                        return Err(Error::KeyNotAvailable(PoolType::Transparent));
                     }
                 }
 
@@ -2268,10 +2352,20 @@ where
                 Ok(())
             };
 
-        match recipient_address
+        let recipient = recipient_address
             .clone()
-            .convert_if_network(params.network_type())?
-        {
+            .convert_if_network(params.network_type())?;
+
+        if let Address::Unified(ua) = &recipient {
+            check_recipient_expiry(ua, min_target_height, tx_expiry_height, now).map_err(
+                |error| Error::RecipientAddressExpiry {
+                    payment_index,
+                    error,
+                },
+            )?;
+        }
+
+        match recipient {
             Address::Unified(ua) => match output_pool {
                 #[cfg(not(feature = "orchard"))]
                 PoolType::Shielded(ShieldedPool::Orchard) => {
@@ -2306,7 +2400,7 @@ where
                 }
             },
             Address::Sapling(to) => {
-                add_sapling_output(&mut builder, &mut sapling_output_meta, to)?;
+                add_sapling_output(&mut builder, &mut sapling_output_meta, *to)?;
             }
             Address::Transparent(to) => {
                 add_transparent_output(&mut builder, &mut transparent_output_meta, to)?;
@@ -2566,6 +2660,7 @@ fn create_proposed_transaction<DbT, ParamsT, InputsErrT, FeeRuleT, ChangeErrT, N
     >,
     proposed_version: Option<TxVersion>,
     expiry_height: Option<BlockHeight>,
+    now: SystemTime,
 ) -> Result<
     StepResult<<DbT as WalletRead>::AccountId>,
     CreateErrT<DbT, InputsErrT, FeeRuleT, ChangeErrT, N>,
@@ -2591,6 +2686,7 @@ where
         // The non-PCZT path always builds padded Orchard-pool bundles.
         BundlePadding::DEFAULT,
         expiry_height,
+        now,
     )?;
 
     // Build the transaction with the specified fee rule
@@ -2621,6 +2717,12 @@ where
                 for key in keys {
                     transparent_signing_set.add_key(*key);
                 }
+            }
+            // Unreachable in practice: inputs from an address imported without key material
+            // are rejected when the proposed transaction is constructed.
+            #[cfg(feature = "transparent-key-import")]
+            TransparentAddressSource::StandaloneAddress => {
+                return Err(Error::AddressNotRecognized(_address));
             }
         }
     }
@@ -2856,6 +2958,7 @@ where
 pub fn create_pczt_from_proposal<DbT, ParamsT, InputsErrT, FeeRuleT, ChangeErrT, N>(
     wallet_db: &mut DbT,
     params: &ParamsT,
+    clock: &impl Clock,
     account_id: <DbT as WalletRead>::AccountId,
     ovk_policy: OvkPolicy,
     proposal: &Proposal<FeeRuleT, N>,
@@ -2879,6 +2982,10 @@ where
     if proposal.steps().len() > 1 {
         return Err(Error::ProposalNotSupported);
     }
+
+    // Defense-in-depth: reject oversized proposals at the build entry point.
+    proposal.check_transaction_size()?;
+
     let fee_rule = proposal.fee_rule();
     let min_target_height = proposal.min_target_height();
 
@@ -2915,31 +3022,16 @@ where
         unused_transparent_outputs,
         proposed_version,
         orchard_pool_padding,
-        // This path applies `expiry_height` after the PCZT is built instead (below),
-        // since overriding it via the builder would be redundant with that existing mechanism.
-        None,
+        expiry_height,
+        clock.now(),
     )?;
 
-    // This path applies its expiry AFTER the builder has run, so the refusal inside
-    // `build_proposed_transaction` — which saw `None` above — cannot see the caller's argument.
-    // Without this, an override would silently overwrite the ZIP 318 rolling expiry that
-    // `build_proposed_transaction` set, leaving a transaction canonical in every respect but the
-    // one that is committed and publicly visible.
-    #[cfg(feature = "orchard")]
-    if let Some(requested) = expiry_height
-        && step_is_canonical_crossing(wallet_db, params, proposal_step, min_target_height)
-    {
-        return Err(Error::ExpiryHeightConflictsWithCanonicalCrossing { requested });
-    }
-
-    // Build the transaction with the specified fee rule
-    let mut build_result = build_state
+    // Build the transaction with the specified fee rule. The caller's expiry override
+    // (validated against canonical ZIP 318 crossings) was applied via the builder in
+    // `build_proposed_transaction` above, so the PCZT parts already carry it.
+    let build_result = build_state
         .builder
         .build_for_pczt(OsRng, fee_rule, |_| false)?;
-
-    if let Some(expiry_height) = expiry_height {
-        build_result.pczt_parts.expiry_height = expiry_height;
-    }
 
     let created = Creator::build_from_parts(build_result.pczt_parts).ok_or(PcztError::Build)?;
 
@@ -3201,7 +3293,8 @@ where
                             } => Some((index, *scope, *address_index)),
                             #[cfg(feature = "transparent-key-import")]
                             TransparentAddressSource::StandalonePubkey(_)
-                            | TransparentAddressSource::StandaloneScript(_) => None,
+                            | TransparentAddressSource::StandaloneScript(_)
+                            | TransparentAddressSource::StandaloneAddress => None,
                         }
                     })
                     .collect::<Vec<_>>();
@@ -3209,7 +3302,7 @@ where
                 for (index, scope, address_index) in inputs_to_update {
                     updater.update_input_with(index, |mut input_updater| {
                         let pubkey = ufvk
-                            .transparent()
+                            .p2pkh()
                             .expect("we derived this successfully in build_proposed_transaction")
                             .derive_address_pubkey(scope, address_index)
                             .expect("spending key derivation should not fail");
@@ -3486,6 +3579,7 @@ pub fn redact_pczt_for_batch_signer(pczt: &pczt::Pczt) -> pczt::Pczt {
 #[cfg(feature = "pczt")]
 pub fn extract_and_store_transaction_from_pczt<DbT, N>(
     wallet_db: &mut DbT,
+    clock: &impl Clock,
     pczt: pczt::Pczt,
     sapling_vk: Option<(
         &sapling::circuit::SpendVerifyingKey,
@@ -4011,7 +4105,7 @@ where
     // We don't need the spent UTXOs to be in transaction order.
     let utxos_spent = utxos_map.into_keys().collect::<Vec<_>>();
 
-    let created = time::OffsetDateTime::now_utc();
+    let created = time::OffsetDateTime::from(clock.now());
 
     let transactions = vec![SentTransaction::new(
         &transaction,
@@ -4070,6 +4164,7 @@ where
 pub fn shield_transparent_funds<DbT, ParamsT, InputsT, ChangeT>(
     wallet_db: &mut DbT,
     params: &ParamsT,
+    clock: &impl Clock,
     spend_prover: &impl SpendProver,
     output_prover: &impl OutputProver,
     input_selector: &InputsT,
@@ -4102,6 +4197,7 @@ where
     create_proposed_transactions(
         wallet_db,
         params,
+        clock,
         spend_prover,
         output_prover,
         spending_keys,
