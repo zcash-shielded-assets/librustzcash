@@ -390,7 +390,7 @@ mod tests {
         let mut rng = ChaChaRng::from_seed([0u8; 32]);
         let secp = Secp256k1::new();
         for _ in 0..100 {
-            let secret = SecretKey::new(&mut rng);
+            let secret = SecretKey::from_byte_array(rng.r#gen()).unwrap();
             let compressed = rng.gen_bool(0.5);
             let key = Key { secret, compressed };
 
@@ -411,7 +411,7 @@ mod tests {
                     let secret = &SecretString::new(v.base58_encoding.into());
                     let privkey = Key::decode_base58(&v.network, secret).unwrap();
                     assert_eq!(privkey.compressed, is_compressed);
-                    assert_eq!(hex::encode(privkey.secret.as_ref()), v.raw_bytes_hex);
+                    assert_eq!(hex::encode(privkey.secret.secret_bytes()), v.raw_bytes_hex);
 
                     // Private key must be invalid public key
                     assert_eq!(
@@ -460,7 +460,7 @@ mod tests {
     #[cfg(feature = "transparent-key-encoding")]
     fn key_debug_redaction() {
         let mut rng = ChaChaRng::from_seed([0u8; 32]);
-        let secret = SecretKey::new(&mut rng);
+        let secret = SecretKey::from_byte_array(rng.r#gen()).unwrap();
         let key = Key {
             secret,
             compressed: true,

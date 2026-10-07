@@ -348,8 +348,7 @@ mod tests {
     }
 
     fn pubkey(sk: &secp256k1::SecretKey) -> [u8; 33] {
-        sk.public_key(&secp256k1::Secp256k1::signing_only())
-            .serialize()
+        sk.public_key().serialize()
     }
 
     fn sign(
@@ -373,7 +372,7 @@ mod tests {
         sighash_policy: SighashPolicy,
     ) -> Result<(), SignerError> {
         let secp = secp256k1::Secp256k1::new();
-        let sig = secp.sign_ecdsa(&secp256k1::Message::from_digest(SIGHASH), sk);
+        let sig = secp.sign_ecdsa(secp256k1::Message::from_digest(SIGHASH), sk);
         input.append_signature_with_sighash_policy(0, |_| SIGHASH, sig, &secp, sighash_policy)
     }
 

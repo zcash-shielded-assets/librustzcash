@@ -899,9 +899,9 @@ mod tests {
     fn new_p2pkh_spend_with_key(
         key_bytes: [u8; 32],
     ) -> (SecretKey, secp256k1::PublicKey, TxOut, OutPoint) {
-        let sk = SecretKey::from_slice(&key_bytes).expect("32 bytes is a valid secret key");
+        let sk = SecretKey::from_byte_array(key_bytes).expect("32 bytes is a valid secret key");
         let secp = Secp256k1::new();
-        let pk = secp256k1::PublicKey::from_secret_key(&secp, &sk);
+        let pk = secp256k1::PublicKey::from_secret_key(&sk);
 
         let taddr = TransparentAddress::PublicKeyHash(crate::util::hash160::hash(&pk.serialize()));
 
@@ -962,8 +962,8 @@ mod tests {
         let signing_secp = Secp256k1::signing_only();
         let msg1 = Message::from_digest_slice(&sighash1).unwrap();
         let msg2 = Message::from_digest_slice(&sighash2).unwrap();
-        let sig1 = signing_secp.sign_ecdsa(&msg1, &sk1);
-        let sig2 = signing_secp.sign_ecdsa(&msg2, &sk2);
+        let sig1 = signing_secp.sign_ecdsa(msg1, &sk1);
+        let sig2 = signing_secp.sign_ecdsa(msg2, &sk2);
 
         // Create a batch with the correct signatures
         let signatures_batch = vec![sig1, sig2];
@@ -994,11 +994,11 @@ mod tests {
 
         // Create a signature from a different key
         let unrelated_sk_bytes = [2; 32];
-        let unrelated_sk = SecretKey::from_slice(&unrelated_sk_bytes).unwrap();
+        let unrelated_sk = SecretKey::from_byte_array(unrelated_sk_bytes).unwrap();
 
         let sighash = sig_context.sighashes[0];
         let msg = Message::from_digest_slice(&sighash).unwrap();
-        let bad_signature = Secp256k1::signing_only().sign_ecdsa(&msg, &unrelated_sk);
+        let bad_signature = Secp256k1::signing_only().sign_ecdsa(msg, &unrelated_sk);
 
         // Assert that appending this "bad" signature fails with the correct error
         let result = sig_context.append_external_signatures(&[bad_signature]);
@@ -1036,7 +1036,7 @@ mod tests {
         // Create one signature from the first key that will now appear valid for both inputs
         let sighash = sig_context.sighashes[0]; // Both sighashes are identical ([42; 32])
         let msg = Message::from_digest_slice(&sighash).unwrap();
-        let ambiguous_sig = Secp256k1::signing_only().sign_ecdsa(&msg, &sk);
+        let ambiguous_sig = Secp256k1::signing_only().sign_ecdsa(msg, &sk);
 
         // Assert that appending this one signature fails with DuplicateSignature
         let result = sig_context.append_external_signatures(&[ambiguous_sig]);
@@ -1068,7 +1068,7 @@ mod tests {
         // Create and append a signature for only the first input
         let sighash1 = sig_context.sighashes[0];
         let msg1 = Message::from_digest_slice(&sighash1).unwrap();
-        let sig1 = Secp256k1::signing_only().sign_ecdsa(&msg1, &sk1);
+        let sig1 = Secp256k1::signing_only().sign_ecdsa(msg1, &sk1);
 
         // This append operation should succeed, as we are providing one valid signature.
         let result_after_append = sig_context.append_external_signatures(&[sig1]);
@@ -1101,10 +1101,10 @@ mod tests {
         use zcash_script::script::{Component, Evaluable, FromChain};
 
         let secp = Secp256k1::new();
-        let sk1 = SecretKey::from_slice(&key_bytes_1).unwrap();
-        let sk2 = SecretKey::from_slice(&key_bytes_2).unwrap();
-        let pk1 = secp256k1::PublicKey::from_secret_key(&secp, &sk1);
-        let pk2 = secp256k1::PublicKey::from_secret_key(&secp, &sk2);
+        let sk1 = SecretKey::from_byte_array(key_bytes_1).unwrap();
+        let sk2 = SecretKey::from_byte_array(key_bytes_2).unwrap();
+        let pk1 = secp256k1::PublicKey::from_secret_key(&sk1);
+        let pk2 = secp256k1::PublicKey::from_secret_key(&sk2);
 
         // Build a 2-of-2 multisig redeem script
         let redeem_script: FromChain =

@@ -638,6 +638,7 @@ mod tests {
                 if let Some(note) = Note::from_parts(
                     fvk.address_at(0u32, Scope::External),
                     NoteValue::from_raw(value),
+                    orchard::note::AssetBase::zatoshi(),
                     rho,
                     rseed,
                     NoteVersion::V2,

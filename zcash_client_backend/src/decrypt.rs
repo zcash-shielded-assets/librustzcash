@@ -567,7 +567,7 @@ mod tests {
             cv,
             cmu,
             ephemeral_key,
-            enc_ciphertext,
+            enc_ciphertext.0,
             out_ciphertext,
             [0u8; core::mem::size_of::<::sapling::bundle::GrothProofBytes>()],
         );
@@ -699,9 +699,15 @@ mod tests {
         };
 
         let value = OrchardNoteValue::from_raw(VALUE.into_u64());
-        let note =
-            ::orchard::Note::from_parts(recipient, value, rho, rseed, ::orchard::NoteVersion::V2)
-                .expect("the note parts are consistent");
+        let note = ::orchard::Note::from_parts(
+            recipient,
+            value,
+            ::orchard::note::AssetBase::zatoshi(),
+            rho,
+            rseed,
+            ::orchard::NoteVersion::V2,
+        )
+        .expect("the note parts are consistent");
         let cmx = ExtractedNoteCommitment::from(note.commitment());
         let cv_net = ValueCommitment::derive(
             OrchardNoteValue::from_raw(0) - value,
