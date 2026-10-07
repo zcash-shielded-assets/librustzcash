@@ -125,7 +125,7 @@ impl Key {
             network
                 .b58_secret_key_prefix()
                 .iter()
-                .chain(self.secret.secret_bytes().iter())
+                .chain(self.secret.to_secret_bytes().iter())
                 .chain(self.compressed.then_some(&1))
                 .copied()
                 .collect(),
@@ -156,19 +156,12 @@ impl Key {
 
     /// Derives the secp256k1 public key corresponding to the secret key,
     /// using the provided secp context.
-    pub fn pubkey_with_context<C: Signing>(&self, secp: &Secp256k1<C>) -> PublicKey {
+    pub fn pubkey_with_context<C: Signing>(&self, _secp: &Secp256k1<C>) -> PublicKey {
         self.secret.public_key()
     }
 
     /// Generates the "openssh-inspired" DER encoding of the secret key used by zcashd.
     pub fn der_encode(&self) -> SecretVec<u8> {
-        let secp = secp256k1::Secp256k1::new();
-        self.der_encode_with_context(&secp)
-    }
-
-    /// Generates the "openssh-inspired" DER encoding of the secret key used by zcashd,
-    /// using the provided secp context for pubkey encoding.
-    pub fn der_encode_with_context<C: Signing>(&self, secp: &Secp256k1<C>) -> SecretVec<u8> {
         // Ported from https://github.com/zcash/zcash/blob/1f1f7a385adc048154e7f25a3a0de76f3658ca09/src/key.cpp#L93
         // The original c++ code is retained as comments.
 
@@ -207,7 +200,7 @@ impl Key {
             SecretVec::new(
                 begin
                     .iter()
-                    .chain(keypair.secret_bytes().iter())
+                    .chain(keypair.to_secret_bytes().iter())
                     .chain(middle.iter())
                     .chain(keypair.public_key().serialize().iter())
                     .copied()
@@ -242,7 +235,7 @@ impl Key {
             SecretVec::new(
                 begin
                     .iter()
-                    .chain(keypair.secret_bytes().iter())
+                    .chain(keypair.to_secret_bytes().iter())
                     .chain(middle.iter())
                     .chain(keypair.public_key().serialize_uncompressed().iter())
                     .copied()
@@ -371,9 +364,9 @@ pub mod test_vectors;
 
 #[cfg(all(test, feature = "transparent-key-encoding"))]
 mod tests {
-    use rand::{Rng, SeedableRng as _};
+    use rand::{Rng, RngExt, SeedableRng as _};
     use rand_chacha::ChaChaRng;
-    use secp256k1::{Secp256k1, SecretKey};
+    use secp256k1::SecretKey;
     use secrecy::SecretString;
     use transparent::address::TransparentAddress;
     use zcash_protocol::consensus::NetworkType;
@@ -384,17 +377,27 @@ mod tests {
         test_vectors::{INVALID, VALID, VectorKind},
     };
 
+    /// Generates a uniformly random secp256k1 secret key.
+    fn random_secret_key(rng: &mut impl Rng) -> SecretKey {
+        loop {
+            let mut bytes = [0u8; 32];
+            rng.fill_bytes(&mut bytes);
+            if let Ok(secret) = SecretKey::from_secret_bytes(bytes) {
+                return secret;
+            }
+        }
+    }
+
     #[test]
     #[cfg(feature = "transparent-key-encoding")]
     fn der_encoding_roundtrip() {
         let mut rng = ChaChaRng::from_seed([0u8; 32]);
-        let secp = Secp256k1::new();
         for _ in 0..100 {
-            let secret = SecretKey::from_byte_array(rng.r#gen()).unwrap();
-            let compressed = rng.gen_bool(0.5);
+            let secret = random_secret_key(&mut rng);
+            let compressed = rng.random_bool(0.5);
             let key = Key { secret, compressed };
 
-            let encoded = key.der_encode_with_context(&secp);
+            let encoded = key.der_encode();
             let decoded = Key::der_decode(&encoded, compressed).unwrap();
 
             assert_eq!(key.secret(), decoded.secret());
@@ -411,7 +414,10 @@ mod tests {
                     let secret = &SecretString::new(v.base58_encoding.into());
                     let privkey = Key::decode_base58(&v.network, secret).unwrap();
                     assert_eq!(privkey.compressed, is_compressed);
-                    assert_eq!(hex::encode(privkey.secret.secret_bytes()), v.raw_bytes_hex);
+                    assert_eq!(
+                        hex::encode(privkey.secret.to_secret_bytes()),
+                        v.raw_bytes_hex
+                    );
 
                     // Private key must be invalid public key
                     assert_eq!(
@@ -460,7 +466,7 @@ mod tests {
     #[cfg(feature = "transparent-key-encoding")]
     fn key_debug_redaction() {
         let mut rng = ChaChaRng::from_seed([0u8; 32]);
-        let secret = SecretKey::from_byte_array(rng.r#gen()).unwrap();
+        let secret = random_secret_key(&mut rng);
         let key = Key {
             secret,
             compressed: true,

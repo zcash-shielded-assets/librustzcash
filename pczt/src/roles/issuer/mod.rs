@@ -8,7 +8,7 @@
 //! - Phase 2 (after IoFinalizer): sign with the shielded sighash
 
 use alloc::vec::Vec;
-use rand_core::RngCore;
+use rand_core::Rng;
 
 use orchard::{
     Address,
@@ -38,7 +38,7 @@ impl Issuer {
     ///
     /// Must run after Creator and before IoFinalizer.
     #[cfg(feature = "zcp-builder")]
-    pub fn build_awaiting_sighash<R: RngCore>(
+    pub fn build_awaiting_sighash<R: Rng>(
         self,
         zsa: zcash_primitives::transaction::zsa_builder::ZsaBuilder,
         rng: R,
@@ -63,7 +63,7 @@ impl Issuer {
     ///
     /// [`ZsaBuilder`]: zcash_primitives::transaction::zsa_builder::ZsaBuilder
     #[cfg(feature = "zcp-builder")]
-    pub fn build_awaiting_sighash_from_intents<R: RngCore>(
+    pub fn build_awaiting_sighash_from_intents<R: Rng>(
         mut self,
         isk: &IssueAuthKey<ZSASchnorr>,
         mut rng: R,
@@ -153,7 +153,7 @@ fn first_orchard_nullifier(pczt: &Pczt) -> Result<Nullifier, Error> {
 /// nullifier, serializes the resulting bundle, clears intents, and returns the
 /// updated PCZT.
 #[cfg(feature = "zcp-builder")]
-fn build_with_zsa<R: RngCore>(
+fn build_with_zsa<R: Rng>(
     mut pczt: Pczt,
     zsa: zcash_primitives::transaction::zsa_builder::ZsaBuilder,
     first_nullifier: &Nullifier,

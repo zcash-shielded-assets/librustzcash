@@ -3,7 +3,7 @@
 //! - Sets the appropriate bits in `Global.tx_modifiable` to 0.
 //! - Updates the various bsk values using the rcv information from spends and outputs.
 
-use rand_core::OsRng;
+use rand_core::{CryptoRng, Rng};
 use zcash_primitives::transaction::{sighash::SignableInput, txid::TxIdDigester};
 
 use crate::{
@@ -27,9 +27,9 @@ impl IoFinalizer {
 
     /// Finalizes the IO of the PCZT.
     ///
-    /// Returns the finalized PCZT along with the shielded sighash, which is
-    /// required by the Issuer role for signing the ZSA issue bundle.
-    pub fn finalize_io(self) -> Result<(Pczt, [u8; 32]), Error> {
+    /// Returns the PCZT and shielded sighash needed for ZSA issuance signing.
+    /// `rng` supplies randomness for dummy shielded spend signatures.
+    pub fn finalize_io<R: Rng + CryptoRng>(self, mut rng: R) -> Result<(Pczt, [u8; 32]), Error> {
         let Self { pczt } = self;
 
         let has_orchard_actions = !pczt.orchard.actions.is_empty();
@@ -89,7 +89,7 @@ impl IoFinalizer {
         // the bundle is empty.
         sapling
             .bundle
-            .finalize_io(shielded_sighash, OsRng)
+            .finalize_io(shielded_sighash, &mut rng)
             .map_err(Error::SaplingFinalize)?;
         // An empty Orchard-protocol bundle carries no value commitment information
         // and contributes nothing to the transaction; leave its `bsk` unset so that
@@ -100,14 +100,14 @@ impl IoFinalizer {
                 PcztOrchardBundle::Vanilla(parsed) => {
                     parsed
                         .bundle
-                        .finalize_io(shielded_sighash, OsRng)
+                        .finalize_io(shielded_sighash, &mut rng)
                         .map_err(Error::OrchardFinalize)?;
                 }
                 #[cfg(feature = "zsa")]
                 PcztOrchardBundle::Zsa(parsed) => {
                     parsed
                         .bundle
-                        .finalize_io(shielded_sighash, OsRng)
+                        .finalize_io(shielded_sighash, &mut rng)
                         .map_err(Error::OrchardFinalize)?;
                 }
             }
@@ -115,7 +115,7 @@ impl IoFinalizer {
         if has_ironwood_actions {
             ironwood
                 .bundle
-                .finalize_io(shielded_sighash, OsRng)
+                .finalize_io(shielded_sighash, &mut rng)
                 .map_err(Error::IronwoodFinalize)?;
         }
 

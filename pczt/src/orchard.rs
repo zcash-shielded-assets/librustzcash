@@ -16,19 +16,22 @@ use {
         Address, Note, ValuePool,
         bundle::BundleVersion,
         note::{ExtractedNoteCommitment, Nullifier, RandomSeed, Rho},
-        note_encryption::{CompactAction, IronwoodDomain, OrchardDomain, OrchardNoteEncryption},
+        note_encryption::{
+            COMPACT_NOTE_SIZE, CompactAction, IronwoodDomain, NoteCiphertextBytes, OrchardDomain,
+            OrchardNoteEncryption,
+        },
         value::{NoteValue, ValueCommitTrapdoor, ValueCommitment},
     },
     ff::PrimeField,
     zcash_note_encryption::{
-        COMPACT_NOTE_SIZE, Domain, ENC_CIPHERTEXT_SIZE, EphemeralKeyBytes, ShieldedOutput,
+        Domain, EphemeralKeyBytes, ShieldedOutput, note_bytes::NoteBytes,
         try_output_recovery_with_pkd_esk,
     },
     zcash_protocol::consensus::{BranchId, OrchardProtocolRevision},
 };
 
 use crate::{
-    common::{Global, Zip32Derivation},
+    common::{Global, SecretKeyBytes, Zip32Derivation},
     roles::combiner::{merge_map, merge_optional},
 };
 
@@ -88,7 +91,7 @@ pub struct Bundle {
     ///
     /// - This is `None` until it is set by the IO Finalizer.
     /// - The Transaction Extractor uses this to produce the binding signature.
-    pub(crate) bsk: Option<[u8; 32]>,
+    pub(crate) bsk: Option<SecretKeyBytes>,
 }
 
 /// The default Orchard bundle flags: both spends and outputs enabled (bits 0 and
@@ -356,6 +359,7 @@ fn recover_memo_plaintext_from_ciphertext_and_action(
 ) -> Option<MemoPlaintext> {
     // Everything else this function needs is imported at module scope; only
     // the note-bytes container is not.
+    use orchard::note_encryption::ENC_CIPHERTEXT_SIZE;
     use zcash_note_encryption::note_bytes::NoteBytesData;
 
     struct OutputRecoveryData {
@@ -421,7 +425,7 @@ fn recover_memo_plaintext_from_ciphertext_and_action(
     }
 
     let enc_ciphertext = match &action.output.enc_ciphertext {
-        EncCiphertext::Encrypted(ciphertext) => ciphertext.as_slice().try_into().ok()?,
+        EncCiphertext::Encrypted(ciphertext) => NoteCiphertextBytes::from_slice(ciphertext)?,
         // we return None here to avoid excess sets or clone operations, as the caller need not do anything in this case.
         EncCiphertext::MemoPlaintext(_) => return None,
     };
@@ -448,12 +452,11 @@ fn recover_memo_plaintext_from_ciphertext_and_action(
     let nullifier = Option::from(Nullifier::from_bytes(&action.spend.nullifier))?;
     // Memo recovery is best-effort and should not resolve redacted fields.
     // Callers that want redacted `cmx` restored should use `resolve_fields`.
-    let cmx_bytes = action.output.cmx?;
-    let cmx = Option::from(ExtractedNoteCommitment::from_bytes(&cmx_bytes))?;
+    let cmx = Option::from(ExtractedNoteCommitment::from_bytes(&action.output.cmx?))?;
     let output = OutputRecoveryData {
         cmx,
         ephemeral_key: action.output.ephemeral_key,
-        enc_ciphertext: NoteBytesData(enc_ciphertext),
+        enc_ciphertext,
     };
     let compact_action = CompactAction::from_parts(
         nullifier,
@@ -646,7 +649,7 @@ pub struct Spend {
     /// - This is required by the IO Finalizer, and is cleared by it once used.
     /// - Signers MUST reject PCZTs that contain `dummy_sk` values.
     #[getset(get = "pub")]
-    pub(crate) dummy_sk: Option<[u8; 32]>,
+    pub(crate) dummy_sk: Option<SecretKeyBytes>,
 
     /// Proprietary fields related to the note being spent.
     #[getset(get = "pub")]
@@ -759,7 +762,7 @@ pub mod v1 {
         value_sum: (u64, bool),
         anchor: [u8; 32],
         zkproof: Option<Vec<u8>>,
-        bsk: Option<[u8; 32]>,
+        bsk: Option<crate::common::SecretKeyBytes>,
     }
 
     /// Information about an Orchard action within a transaction.
@@ -790,7 +793,7 @@ pub mod v1 {
         witness: Option<(u32, [[u8; 32]; 32])>,
         alpha: Option<[u8; 32]>,
         zip32_derivation: Option<Zip32Derivation>,
-        dummy_sk: Option<[u8; 32]>,
+        dummy_sk: Option<crate::common::SecretKeyBytes>,
         proprietary: BTreeMap<String, Vec<u8>>,
         asset: Option<[u8; 32]>,
     }
@@ -1037,7 +1040,7 @@ pub(crate) mod v2 {
         anchor: Option<[u8; 32]>,
         note_version: SerializedNoteVersion,
         zkproof: Option<Vec<u8>>,
-        bsk: Option<[u8; 32]>,
+        bsk: Option<crate::common::SecretKeyBytes>,
     }
 
     /// Information about an Orchard action within a transaction.
@@ -1070,7 +1073,7 @@ pub(crate) mod v2 {
         witness: Option<(u32, [[u8; 32]; 32])>,
         alpha: Option<[u8; 32]>,
         zip32_derivation: Option<crate::common::Zip32Derivation>,
-        dummy_sk: Option<[u8; 32]>,
+        dummy_sk: Option<crate::common::SecretKeyBytes>,
         proprietary: BTreeMap<String, Vec<u8>>,
         asset: Option<[u8; 32]>,
     }
@@ -2225,9 +2228,29 @@ impl Output {
         )
         .into_option()
         .ok_or(orchard::pczt::ParseError::InvalidEncCiphertext)?;
-        let encryptor = OrchardNoteEncryption::new(None, note, memo);
-        let ephemeral_key = OrchardDomain::epk_bytes(encryptor.epk()).0;
-        let enc_ciphertext = encryptor.encrypt_note_plaintext().as_ref().to_vec();
+        #[cfg(feature = "zsa")]
+        let zsa_ciphertext = if note_version == NoteVersion::V3ZSA {
+            use orchard::zsa::OrchardZSADomain;
+            let encryptor =
+                zcash_note_encryption::NoteEncryption::<OrchardZSADomain>::new(None, note, memo);
+            Some((
+                OrchardZSADomain::epk_bytes(encryptor.epk()).0,
+                encryptor.encrypt_note_plaintext().as_ref().to_vec(),
+            ))
+        } else {
+            None
+        };
+        let vanilla_ciphertext = || {
+            let encryptor = OrchardNoteEncryption::new(None, note, memo);
+            (
+                OrchardDomain::epk_bytes(encryptor.epk()).0,
+                encryptor.encrypt_note_plaintext().as_ref().to_vec(),
+            )
+        };
+        #[cfg(feature = "zsa")]
+        let (ephemeral_key, enc_ciphertext) = zsa_ciphertext.unwrap_or_else(vanilla_ciphertext);
+        #[cfg(not(feature = "zsa"))]
+        let (ephemeral_key, enc_ciphertext) = vanilla_ciphertext();
 
         if ephemeral_key != self.ephemeral_key {
             return Err(orchard::pczt::ParseError::InvalidEncCiphertext);
@@ -2399,7 +2422,7 @@ impl Bundle {
         // transactions.
         #[inline(never)]
         fn parse_action_inner<D: zcash_note_encryption::Domain>(
-            action: Action,
+            mut action: Action,
             note_version: NoteVersion,
             preverified: bool,
         ) -> Result<orchard::pczt::Action<D>, orchard::pczt::ParseError> {
@@ -2410,6 +2433,7 @@ impl Bundle {
                     orchard::pczt::Zip32Derivation::parse(z.seed_fingerprint, z.derivation_path)
                 })
                 .transpose()?;
+            let spend_nullifier = action.spend.nullifier;
             let parse_spend = if preverified {
                 orchard::pczt::Spend::parse_preverified_for_signing
             } else {
@@ -2428,11 +2452,14 @@ impl Bundle {
                 action.spend.witness,
                 action.spend.alpha,
                 spend_zip32_derivation,
-                action.spend.dummy_sk,
+                action.spend.dummy_sk.as_ref().map(|sk| *sk.expose_secret()),
                 note_version,
                 action.spend.proprietary,
                 action.spend.asset,
             )?;
+            action
+                .output
+                .encrypt_ciphertext_from_memo(note_version, spend_nullifier)?;
 
             let enc_ciphertext = action
                 .output
@@ -2485,7 +2512,7 @@ impl Bundle {
             self.value_sum,
             anchor,
             self.zkproof,
-            self.bsk,
+            self.bsk.as_ref().map(|bsk| *bsk.expose_secret()),
         )?;
 
         Ok(Parsed {
@@ -2555,7 +2582,8 @@ impl Bundle {
                         dummy_sk: action
                             .spend()
                             .dummy_sk()
-                            .map(|dummy_sk| *dummy_sk.to_bytes()),
+                            .as_ref()
+                            .map(|dummy_sk| SecretKeyBytes::new(*dummy_sk.to_bytes())),
                         proprietary: spend.proprietary().clone(),
                         asset: spend.asset().map(|a| a.to_bytes()),
                         rseed_split_note: spend.rseed_split_note().map(|rseed| *rseed.as_bytes()),
@@ -2612,7 +2640,10 @@ impl Bundle {
                 .zkproof()
                 .as_ref()
                 .map(|zkproof| zkproof.as_ref().to_vec()),
-            bsk: bundle.bsk().as_ref().map(|bsk| bsk.into()),
+            bsk: bundle
+                .bsk()
+                .as_ref()
+                .map(|bsk| SecretKeyBytes::new(bsk.to_bytes())),
         }
     }
 }
@@ -2749,6 +2780,27 @@ mod shape_tests {
     }
 
     proptest! {
+        #[cfg(all(feature = "orchard", feature = "zsa"))]
+        #[test]
+        fn zsa_memo_resolution_preserves_extended_ciphertext(
+            note in orchard::note::testing::arb_note(orchard::value::NoteValue::ZERO, NoteVersion::V3ZSA),
+        ) {
+            use orchard::zsa::OrchardZSADomain;
+            use zcash_note_encryption::{Domain, NoteEncryption};
+
+            let memo = [0; super::MEMO_SIZE];
+            let encryptor = NoteEncryption::<OrchardZSADomain>::new(None, note, memo);
+            let expected = encryptor.encrypt_note_plaintext().as_ref().to_vec();
+            let mut output = output(Some(note.value().inner()), Some(note.recipient().to_raw_address_bytes()));
+            output.ephemeral_key = OrchardZSADomain::epk_bytes(encryptor.epk()).0;
+            output.rseed = Some(*note.rseed().as_bytes());
+            output.asset = Some(note.asset().to_bytes());
+            output.enc_ciphertext = EncCiphertext::MemoPlaintext(super::MemoPlaintext::from_memo(memo));
+
+            output.encrypt_ciphertext_from_memo(NoteVersion::V3ZSA, note.rho().to_bytes()).unwrap();
+            prop_assert_eq!(output.enc_ciphertext, EncCiphertext::Encrypted(expected));
+        }
+
         /// `sole_action` is about the count and nothing else.
         #[test]
         fn sole_action_answers_exactly_when_there_is_one_action(bundle in arb_bundle()) {

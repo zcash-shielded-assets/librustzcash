@@ -12,12 +12,12 @@ use orchard::{
     Action, Anchor, ValuePool,
     bundle::{Authorization, Authorized, BundleVersion, Flags},
     note::{ExtractedNoteCommitment, Nullifier, TransmittedNoteCiphertext},
-    note_encryption::OrchardDomain,
+    note_encryption::{ENC_CIPHERTEXT_SIZE, OrchardDomain},
     primitives::redpallas::{self, SigType, Signature, SpendAuth, VerificationKey},
     value::ValueCommitment,
 };
 use zcash_encoding::{Array, CompactSize, Vector};
-use zcash_note_encryption::{ENC_CIPHERTEXT_SIZE, EphemeralKeyBytes, OUT_CIPHERTEXT_SIZE};
+use zcash_note_encryption::{EphemeralKeyBytes, OUT_CIPHERTEXT_SIZE};
 use zcash_protocol::{
     consensus::{BranchId, OrchardProtocolRevision},
     value::ZatBalance,
@@ -309,7 +309,7 @@ pub fn read_note_ciphertext<R: Read>(
 ) -> io::Result<TransmittedNoteCiphertext<OrchardDomain>> {
     use zcash_note_encryption::note_bytes::NoteBytesData;
     let mut epk_bytes = [0u8; 32];
-    let mut enc_ciphertext = NoteBytesData([0u8; 580]); // TODO: use ENC_CIPHERTEXT_SIZE constant for ZSA compat
+    let mut enc_ciphertext = NoteBytesData([0u8; orchard::note_encryption::ENC_CIPHERTEXT_SIZE]); // TODO: use ENC_CIPHERTEXT_SIZE constant for ZSA compat
     let mut out_ciphertext = [0u8; 80];
 
     reader.read_exact(&mut epk_bytes)?;

@@ -12,7 +12,7 @@ use orchard::{
     note::{AssetBase, Nullifier},
     value::NoteValue,
 };
-use rand_core::RngCore;
+use rand_core::Rng;
 
 /// A builder for constructing a ZSA issuance bundle.
 ///
@@ -63,7 +63,7 @@ impl ZsaBuilder {
         recipient: Address,
         value: NoteValue,
         first_issuance: bool,
-        rng: impl RngCore,
+        rng: impl Rng,
     ) -> Result<AssetBase, issuance::Error> {
         match self.bundle.as_mut() {
             Some(bundle) => {
@@ -139,7 +139,7 @@ impl ZsaBuilder {
     pub fn build(
         self,
         first_nullifier: &Nullifier,
-        rng: impl RngCore,
+        rng: impl Rng,
     ) -> Option<(IssueBundle<AwaitingSighash>, IssueAuthKey<ZSASchnorr>)> {
         self.bundle
             .map(|b| (b.update_rho(first_nullifier, rng), self.ik))

@@ -33,7 +33,7 @@ use crate::consensus::{BlockHeight, NetworkType, NetworkUpgrade, OrchardMode, Pa
 ///         nu6_3: Some(BlockHeight::from_u32(1)),
 ///         zsa: Some(BlockHeight::from_u32(1)),
 ///         orchard_mode: OrchardMode::Zsa,
-///         nu7: Some(BlockHeight::from_u32(1)),
+///         nu7: None,
 ///         #[cfg(zcash_unstable = "nutachyon")]
 ///         nu_tachyon: Some(BlockHeight::from_u32(1)),
 ///     };
@@ -162,7 +162,7 @@ mod tests {
             nu6_1: Some(expected_nu6_1),
             nu6_2: Some(expected_nu6_2),
             nu6_3: Some(expected_nu6_3),
-            zsa: Some(expected_nu7),
+            zsa: None,
             orchard_mode: OrchardMode::Normal,
             nu7: Some(expected_nu7),
             #[cfg(zcash_unstable = "nutachyon")]
@@ -216,7 +216,7 @@ mod tests {
             nu6_1: Some(expected_nu6_1),
             nu6_2: Some(expected_nu6_2),
             nu6_3: Some(expected_nu6_3),
-            zsa: Some(expected_nu7),
+            zsa: None,
             orchard_mode: OrchardMode::Normal,
             nu7: Some(expected_nu7),
             #[cfg(zcash_unstable = "nutachyon")]
@@ -263,8 +263,9 @@ mod tests {
             regtest.activation_height(NetworkUpgrade::Nu6_3),
             Some(expected_nu6_3)
         );
+        assert_eq!(regtest.activation_height(NetworkUpgrade::Zsa), None);
         assert_eq!(
-            regtest.activation_height(NetworkUpgrade::Zsa),
+            regtest.activation_height(NetworkUpgrade::Nu7),
             Some(expected_nu7)
         );
         #[cfg(zcash_unstable = "nutachyon")]
@@ -301,7 +302,7 @@ mod tests {
             nu6_1: Some(expected_nu6_1),
             nu6_2: Some(expected_nu6_2),
             nu6_3: Some(expected_nu6_3),
-            zsa: Some(expected_nu7),
+            zsa: None,
             orchard_mode: OrchardMode::Normal,
             nu7: Some(expected_nu7),
             #[cfg(zcash_unstable = "nutachyon")]

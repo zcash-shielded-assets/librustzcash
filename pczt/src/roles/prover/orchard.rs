@@ -1,10 +1,17 @@
 use orchard::circuit::ProvingKey;
-use rand_core::OsRng;
+use rand_core::{CryptoRng, Rng};
 
 use crate::{Pczt, common::AnchorRequirement};
 
 impl super::Prover {
-    pub fn create_orchard_proof(self, pk: &ProvingKey) -> Result<Self, OrchardError> {
+    /// Creates the Orchard proof for this PCZT.
+    ///
+    /// `rng` provides the randomness for the proof.
+    pub fn create_orchard_proof<R: Rng + CryptoRng>(
+        self,
+        rng: R,
+        pk: &ProvingKey,
+    ) -> Result<Self, OrchardError> {
         let Pczt {
             global,
             transparent,
@@ -18,14 +25,14 @@ impl super::Prover {
             .ok_or(OrchardError::UnsupportedConsensusBranchId)?;
 
         #[cfg(feature = "zsa")]
-        let is_nu7 = u32::from(
+        let is_zsa = u32::from(
             zcash_protocol::consensus::BranchId::try_from(global.consensus_branch_id)
                 .unwrap_or(zcash_protocol::consensus::BranchId::Nu5),
         ) == u32::from(zcash_protocol::consensus::BranchId::Zsa);
 
         let orchard_raw = {
             #[cfg(feature = "zsa")]
-            if is_nu7 {
+            if is_zsa {
                 let mut parsed = orchard
                     .into_parsed_with_version_zsa(bundle_version, AnchorRequirement::Required)
                     .map_err(OrchardError::Parser)?;
@@ -36,7 +43,7 @@ impl super::Prover {
                 .map_err(OrchardError::InconsistentWitness)?;
                 parsed
                     .bundle
-                    .create_proof(pk, OsRng)
+                    .create_proof(pk, rng)
                     .map_err(OrchardError::Prover)?;
                 parsed.reserialize()
             } else {
@@ -50,7 +57,7 @@ impl super::Prover {
                 .map_err(OrchardError::InconsistentWitness)?;
                 parsed
                     .bundle
-                    .create_proof(pk, OsRng)
+                    .create_proof(pk, rng)
                     .map_err(OrchardError::Prover)?;
                 parsed.reserialize()
             }
@@ -66,7 +73,7 @@ impl super::Prover {
                 .map_err(OrchardError::InconsistentWitness)?;
                 parsed
                     .bundle
-                    .create_proof(pk, OsRng)
+                    .create_proof(pk, rng)
                     .map_err(OrchardError::Prover)?;
                 parsed.reserialize()
             }
@@ -84,7 +91,14 @@ impl super::Prover {
         })
     }
 
-    pub fn create_ironwood_proof(self, pk: &ProvingKey) -> Result<Self, IronwoodError> {
+    /// Creates the Ironwood proof for this PCZT.
+    ///
+    /// `rng` provides the randomness for the proof.
+    pub fn create_ironwood_proof<R: Rng + CryptoRng>(
+        self,
+        rng: R,
+        pk: &ProvingKey,
+    ) -> Result<Self, IronwoodError> {
         let Pczt {
             global,
             transparent,
@@ -103,7 +117,7 @@ impl super::Prover {
 
         parsed
             .bundle
-            .create_proof(pk, OsRng)
+            .create_proof(pk, rng)
             .map_err(IronwoodError::Prover)?;
 
         Ok(Self {
@@ -142,6 +156,7 @@ pub enum IronwoodError {
 
 #[cfg(test)]
 mod tests {
+    use rand::{rand_core::UnwrapErr, rngs::SysRng};
     extern crate std;
 
     use std::sync::OnceLock;
@@ -170,7 +185,7 @@ mod tests {
         pczt.orchard.actions.push(dummy_action());
 
         assert!(matches!(
-            Prover::new(pczt).create_orchard_proof(proving_key()),
+            Prover::new(pczt).create_orchard_proof(UnwrapErr(SysRng), proving_key()),
             Err(OrchardError::Parser(
                 crate::orchard::ParseError::MissingAnchor
             ))
@@ -186,7 +201,7 @@ mod tests {
         pczt.ironwood.actions.push(dummy_action());
 
         assert!(matches!(
-            Prover::new(pczt).create_ironwood_proof(proving_key()),
+            Prover::new(pczt).create_ironwood_proof(UnwrapErr(SysRng), proving_key()),
             Err(IronwoodError::Parser(
                 crate::orchard::ParseError::MissingAnchor
             ))
@@ -204,7 +219,7 @@ mod tests {
             .unwrap();
 
         let pczt = Prover::new(pczt)
-            .create_orchard_proof(proving_key())
+            .create_orchard_proof(UnwrapErr(SysRng), proving_key())
             .unwrap()
             .finish();
 
@@ -226,7 +241,7 @@ mod tests {
             .unwrap();
 
         let pczt = Prover::new(pczt)
-            .create_ironwood_proof(proving_key())
+            .create_ironwood_proof(UnwrapErr(SysRng), proving_key())
             .unwrap()
             .finish();
 
