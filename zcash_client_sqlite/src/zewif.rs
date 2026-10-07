@@ -1740,7 +1740,7 @@ mod tests {
             nu6_1: one,
             nu6_2: one,
             nu6_3: one,
-            nu7: one,
+            zsa: one,
             orchard_mode: zcash_protocol::consensus::OrchardMode::Normal,
         }
     }

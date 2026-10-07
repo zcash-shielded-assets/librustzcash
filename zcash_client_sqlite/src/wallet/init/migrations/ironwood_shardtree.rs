@@ -320,7 +320,7 @@ mod tests {
                 nu6_1: None,
                 nu6_2: None,
                 nu6_3: Some(activation),
-                nu7: None,
+                zsa: None,
                 orchard_mode: zcash_protocol::consensus::OrchardMode::Normal,
             },
         }

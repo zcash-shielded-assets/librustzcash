@@ -10,6 +10,13 @@ workspace.
 
 ## [Unreleased]
 
+### Changed
+- The deployed ZSA protocol uses `BranchId::Zsa`, `NetworkUpgrade::Zsa`, and
+  `LocalNetwork::zsa`, preserving its existing consensus branch ID and activation rules.
+
+### Fixed
+- References to consensus parameters preserve their `OrchardMode`.
+
 ## [0.10.4] - 2026-08-03
 
 ### Added

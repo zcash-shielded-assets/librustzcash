@@ -122,7 +122,7 @@ impl Creator {
             | BranchId::Nu6_1
             | BranchId::Nu6_2 => (V5_TX_VERSION, V5_VERSION_GROUP_ID),
             BranchId::Nu6_3 => (V6_TX_VERSION, V6_VERSION_GROUP_ID),
-            BranchId::Nu7 => (V6_TX_VERSION, ZSA_V6_VERSION_GROUP_ID),
+            BranchId::Zsa => (V6_TX_VERSION, ZSA_V6_VERSION_GROUP_ID),
         };
 
         Ok(Self {

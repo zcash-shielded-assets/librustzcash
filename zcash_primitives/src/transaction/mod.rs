@@ -301,7 +301,7 @@ impl TxVersion {
             TxVersion::V4 => V4_VERSION_GROUP_ID,
             TxVersion::V5 => V5_VERSION_GROUP_ID,
             TxVersion::V6 => match consensus_branch_id {
-                BranchId::Nu7 => ZSA_V6_VERSION_GROUP_ID,
+                BranchId::Zsa => ZSA_V6_VERSION_GROUP_ID,
                 _ => V6_VERSION_GROUP_ID,
             },
         }
@@ -377,7 +377,7 @@ impl TxVersion {
             BranchId::Nu6_1 => TxVersion::V5,
             BranchId::Nu6_2 => TxVersion::V5,
             BranchId::Nu6_3 => TxVersion::V6,
-            BranchId::Nu7 => TxVersion::V6,
+            BranchId::Zsa => TxVersion::V6,
         }
     }
 
@@ -393,19 +393,19 @@ impl TxVersion {
                 Sprout | Overwinter => false,
                 Sapling | Blossom | Heartwood | Canopy | Nu5 | Nu6 | Nu6_1 | Nu6_2 => true,
                 Nu6_3 => true,
-                Nu7 => false, // ZIP 2003
+                Zsa => false, // ZIP 2003
             },
             TxVersion::V5 => match consensus_branch_id {
                 Sprout | Overwinter | Sapling | Blossom | Heartwood | Canopy => false,
                 Nu5 | Nu6 | Nu6_1 | Nu6_2 => true,
                 Nu6_3 => true,
-                Nu7 => true,
+                Zsa => true,
             },
             TxVersion::V6 => match consensus_branch_id {
                 Sprout | Overwinter | Sapling | Blossom | Heartwood | Canopy | Nu5 | Nu6
                 | Nu6_1 | Nu6_2 => false,
                 Nu6_3 => true, // Ironwood / NU6.3
-                Nu7 => true,   // ZIP 230 or ZIP 248, whichever is chosen for activation
+                Zsa => true,   // ZIP 230 or ZIP 248, whichever is chosen for activation
             },
         }
     }
@@ -471,7 +471,7 @@ pub struct Transaction {
     txid: TxId,
     data: TransactionData<Authorized>,
     /// Raw 612-byte ZSA enc_ciphertexts per orchard action, populated for
-    /// Nu7 transactions. Empty for non-ZSA transactions.
+    /// Zsa transactions. Empty for non-ZSA transactions.
     #[cfg(feature = "zsa")]
     pub zsa_action_enc_ciphertexts: alloc::vec::Vec<alloc::vec::Vec<u8>>,
 }
@@ -618,7 +618,7 @@ impl<A: Authorization> TransactionData<A> {
         }
     }
 
-    /// Constructs a ZSA (Nu7) V6 [`TransactionData`] from its constituent parts,
+    /// Constructs a ZSA (Zsa) V6 [`TransactionData`] from its constituent parts,
     /// including the issue bundle (in place of an Ironwood bundle).
     ///
     /// ZSA uses V6 transaction format but with a different layout than Ironwood:
@@ -841,7 +841,7 @@ impl<A: Authorization> TransactionData<A> {
     /// represented with the Orchard bundle type.
     ///
     /// This method does NOT map the issue bundle; callers should use
-    /// [`try_map_bundles_zsa`] for ZSA (Nu7) transactions.
+    /// [`try_map_bundles_zsa`] for ZSA (Zsa) transactions.
     pub fn try_map_bundles<B: Authorization, E>(
         self,
         f_transparent: impl FnOnce(
@@ -887,7 +887,7 @@ impl<A: Authorization> TransactionData<A> {
     /// Maps the bundles from one type to another with fallible closures,
     /// preserving the ZSA issue bundle.
     ///
-    /// ZSA (Nu7) transactions carry an issue bundle instead of an Ironwood
+    /// ZSA (Zsa) transactions carry an issue bundle instead of an Ironwood
     /// bundle. This method preserves the issue bundle through the mapping,
     /// sets `ironwood_bundle: None`, and applies `f_orchard` only to the
     /// Orchard bundle (not duplicated to an ironwood slot).
@@ -1066,13 +1066,13 @@ impl Transaction {
             }
             TxVersion::V5 => Self::read_v5(reader.into_base_reader(), version),
             TxVersion::V6 => {
-                // V6 is shared by Ironwood (NU6.3) and ZSA (Nu7) which have
+                // V6 is shared by Ironwood (NU6.3) and ZSA (Zsa) which have
                 // different bundle layouts. Peek at the consensus branch id
                 // to determine which deserializer to use.
                 let mut base_reader = reader.into_base_reader();
                 let header_fragment = Self::read_v6_header_fragment(&mut base_reader)?;
                 #[cfg(feature = "zsa")]
-                if header_fragment.consensus_branch_id == BranchId::Nu7 {
+                if header_fragment.consensus_branch_id == BranchId::Zsa {
                     Self::read_zsa(base_reader, version, header_fragment)
                 } else {
                     Self::read_v6_from_header(base_reader, version, header_fragment)
@@ -1257,7 +1257,7 @@ impl Transaction {
         Ok(Self::from_data_v6(data))
     }
 
-    /// Reads a ZSA (Nu7) V6 transaction body, given a pre-read header fragment.
+    /// Reads a ZSA (Zsa) V6 transaction body, given a pre-read header fragment.
     /// ZSA uses the same header structure but carries an issue bundle
     /// instead of an Ironwood bundle.
     #[cfg(feature = "zsa")]
@@ -1337,7 +1337,7 @@ impl Transaction {
             lock_time,
             expiry_height,
             #[cfg(feature = "zip-233")]
-            zip233_amount: if consensus_branch_id == BranchId::Nu7 {
+            zip233_amount: if consensus_branch_id == BranchId::Zsa {
                 Self::read_zip233_amount(&mut reader)?
             } else {
                 Zatoshis::ZERO
@@ -1363,9 +1363,9 @@ impl Transaction {
             TxVersion::Sprout(_) | TxVersion::V3 | TxVersion::V4 => self.write_v4(writer),
             TxVersion::V5 => self.write_v5(writer),
             TxVersion::V6 => {
-                // ZSA (Nu7) uses a different V6 layout than IW (NU6.3):
+                // ZSA (Zsa) uses a different V6 layout than IW (NU6.3):
                 // issue bundle instead of ironwood bundle.
-                if self.consensus_branch_id == BranchId::Nu7 {
+                if self.consensus_branch_id == BranchId::Zsa {
                     #[cfg(feature = "zsa")]
                     {
                         self.write_zsa(writer)
@@ -1374,7 +1374,7 @@ impl Transaction {
                     {
                         Err(io::Error::new(
                             io::ErrorKind::InvalidInput,
-                            "ZSA (Nu7) transactions require the `zsa` feature.",
+                            "ZSA (Zsa) transactions require the `zsa` feature.",
                         ))
                     }
                 } else {
@@ -1479,7 +1479,7 @@ impl Transaction {
         Ok(())
     }
 
-    /// Serializes this transaction in the ZSA V6 transaction format (Nu7).
+    /// Serializes this transaction in the ZSA V6 transaction format (Zsa).
     ///
     /// ZSA uses the same header and pre-bundle structure as Ironwood V6,
     /// but writes an issue bundle in place of the Ironwood bundle.
@@ -1526,7 +1526,7 @@ impl Transaction {
         writer.write_u32_le(u32::from(self.expiry_height))?;
 
         #[cfg(feature = "zip-233")]
-        if self.consensus_branch_id == BranchId::Nu7 {
+        if self.consensus_branch_id == BranchId::Zsa {
             writer.write_u64_le(self.zip233_amount.into())?;
         }
         Ok(())
@@ -1569,7 +1569,7 @@ pub struct TxDigests<A> {
     /// ID is derived from these digests, `None` is combined as the empty Ironwood bundle digest
     /// using the Ironwood bundle personalization.
     pub ironwood_digest: Option<A>,
-    /// The digest of the ZSA issue bundle (Nu7 V6 transactions).
+    /// The digest of the ZSA issue bundle (Zsa V6 transactions).
     #[cfg(feature = "zsa")]
     pub issue_digest: Option<A>,
 }
@@ -1581,7 +1581,7 @@ pub trait TransactionDigest<A: Authorization> {
     type OrchardDigest;
     /// The digest type produced for the Ironwood bundle in version 6 transactions.
     type IronwoodDigest;
-    /// The digest type produced for the ZSA issue bundle in Nu7 transactions.
+    /// The digest type produced for the ZSA issue bundle in Zsa transactions.
     #[cfg(feature = "zsa")]
     type IssueDigest;
 
@@ -1628,7 +1628,7 @@ pub trait TransactionDigest<A: Authorization> {
 
     /// Computes the digest for the ZSA issue bundle.
     ///
-    /// Only relevant for Nu7 (ZSA) transactions. Returns a default/empty digest
+    /// Only relevant for Zsa (ZSA) transactions. Returns a default/empty digest
     /// when no issue bundle is present. When the `zsa` feature is not enabled,
     /// this method is not available and the issue digest defaults to `()`.
     #[cfg(feature = "zsa")]
@@ -1683,7 +1683,7 @@ pub mod testing {
             BranchId::Nu6_1 => Just(TxVersion::V5).boxed(),
             BranchId::Nu6_2 => Just(TxVersion::V5).boxed(),
             BranchId::Nu6_3 => Just(TxVersion::V6).boxed(),
-            BranchId::Nu7 => Just(TxVersion::V6).boxed(),
+            BranchId::Zsa => Just(TxVersion::V6).boxed(),
         }
     }
 
@@ -1735,7 +1735,7 @@ pub mod testing {
                 consensus_branch_id,
                 lock_time,
                 expiry_height: expiry_height.into(),
-                zip233_amount: if consensus_branch_id == BranchId::Nu7 {
+                zip233_amount: if consensus_branch_id == BranchId::Zsa {
                     Zatoshis::from_u64(zip233_amount).unwrap()
                 } else {
                     Zatoshis::ZERO

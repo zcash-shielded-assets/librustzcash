@@ -6,11 +6,11 @@ use crate::transaction::{
     Authorization, TransactionData, TxDigests, sighash::SignableInput, txid::to_hash_zsa,
 };
 
-/// ZSA (Nu7) V6 signature hash.
+/// ZSA (Zsa) V6 signature hash.
 ///
 /// Uses `to_hash_zsa` which includes the issue bundle digest as the final
 /// term, instead of Ironwood's `to_hash_v6` which uses an ironwood digest.
-/// This mirrors the txid computation (`to_txid` uses `to_hash_zsa` for Nu7).
+/// This mirrors the txid computation (`to_txid` uses `to_hash_zsa` for Zsa).
 pub fn zsa_v6_signature_hash<
     TA: TransparentAuthorizingContext,
     A: Authorization<TransparentAuth = TA>,

@@ -802,16 +802,16 @@ pub struct PcztParts<P: Parameters> {
 /// The Orchard-pool PCZT bundle produced by [`Builder::build_for_pczt`], tagged with the
 /// note-encryption domain selected for the transaction's Orchard pool.
 ///
-/// Pre-Nu7 Orchard bundles use [`orchard::note_encryption::OrchardDomain`] (580-byte
-/// `enc_ciphertext`); Nu7/ZSA bundles use [`orchard::zsa::OrchardZSADomain`] (612-byte
+/// Pre-Zsa Orchard bundles use [`orchard::note_encryption::OrchardDomain`] (580-byte
+/// `enc_ciphertext`); Zsa/ZSA bundles use [`orchard::zsa::OrchardZSADomain`] (612-byte
 /// `enc_ciphertext`, including the encrypted asset). Carrying the domain through the PCZT is
 /// what keeps the in-memory bundle, the transaction sighash, and the wire serialization all in
 /// the same (ZSA) form, so the signatures computed over the sighash verify against the wire.
 #[derive(Debug)]
 pub enum OrchardPcztBundle {
-    /// A pre-Nu7 Orchard bundle (`OrchardDomain`, 580-byte ciphertexts).
+    /// A pre-Zsa Orchard bundle (`OrchardDomain`, 580-byte ciphertexts).
     Vanilla(orchard::pczt::Bundle),
-    /// A Nu7/ZSA Orchard bundle (`OrchardZSADomain`, 612-byte ciphertexts).
+    /// A Zsa/ZSA Orchard bundle (`OrchardZSADomain`, 612-byte ciphertexts).
     #[cfg(feature = "zsa")]
     Zsa(orchard::pczt::Bundle<orchard::zsa::OrchardZSADomain>),
 }
@@ -836,7 +836,7 @@ impl OrchardPcztBundle {
     }
 }
 
-/// Returns `true` if the given Orchard bundle version is the ZSA (Nu7) version, which selects
+/// Returns `true` if the given Orchard bundle version is the ZSA (Zsa) version, which selects
 /// the 612-byte [`orchard::zsa::OrchardZSADomain`] note-encryption domain.
 #[cfg(feature = "zsa")]
 fn orchard_bundle_is_zsa(v: Option<orchard::bundle::BundleVersion>) -> bool {
@@ -959,7 +959,7 @@ impl<P, U> Builder<P, U> {
             // (V6) and the consensus branch is one in which Ironwood is active.
             let ironwood_branch = match self.consensus_branch_id {
                 BranchId::Nu6_3 => true,
-                BranchId::Nu7 => false, // ZSA: no Ironwood pool
+                BranchId::Zsa => false, // ZSA: no Ironwood pool
                 _ => false,
             };
             let ironwood_available = version.has_ironwood() && ironwood_branch;
@@ -1012,7 +1012,7 @@ impl<P: consensus::Parameters> Builder<P, ()> {
         let orchard_bundle_version = orchard_builder.as_ref().and(bundle_version);
 
         // The Ironwood builder only exists on NU6.3. NU7 uses ZSA issuance instead.
-        let ironwood_builder = if tx_version.has_ironwood() && consensus_branch_id != BranchId::Nu7
+        let ironwood_builder = if tx_version.has_ironwood() && consensus_branch_id != BranchId::Zsa
         {
             build_config.ironwood_builder()
         } else {
@@ -1869,7 +1869,7 @@ impl<P: consensus::Parameters, U> Builder<P, U> {
             None => (None, SaplingMetadata::empty()),
         };
 
-        // Nu7/ZSA Orchard bundles must be built under `OrchardZSADomain` so that the
+        // Zsa/ZSA Orchard bundles must be built under `OrchardZSADomain` so that the
         // `enc_ciphertext` is the 612-byte ZSA form (with the encrypted asset). Accumulation
         // happens under the default `OrchardDomain`; we re-parameterize the builder here, just
         // before encryption, when the bundle version is ZSA.
@@ -2101,7 +2101,7 @@ mod tests {
             nu6_1: Some(BlockHeight::from_u32(8)),
             nu6_2: Some(BlockHeight::from_u32(9)),
             nu6_3: Some(BlockHeight::from_u32(10)),
-            nu7: None,
+            zsa: None,
             orchard_mode: zcash_protocol::consensus::OrchardMode::Normal,
         }
     }
@@ -2119,7 +2119,7 @@ mod tests {
             nu6_1: Some(BlockHeight::from_u32(8)),
             nu6_2: Some(BlockHeight::from_u32(9)),
             nu6_3: Some(BlockHeight::from_u32(10)),
-            nu7: Some(BlockHeight::from_u32(11)),
+            zsa: Some(BlockHeight::from_u32(11)),
             orchard_mode: zcash_protocol::consensus::OrchardMode::Normal,
         }
     }
@@ -2192,7 +2192,7 @@ mod tests {
             BuildConfig::Coinbase { miner_data: None },
         );
 
-        // Nu7 uses Orchard protocol revision V2 (cross-address enabled),
+        // Zsa uses Orchard protocol revision V2 (cross-address enabled),
         // so a coinbase builder does expose an Orchard builder.
         assert!(builder.orchard_builder.is_some());
     }

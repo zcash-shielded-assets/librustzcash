@@ -21,7 +21,7 @@ impl super::Prover {
         let is_nu7 = u32::from(
             zcash_protocol::consensus::BranchId::try_from(global.consensus_branch_id)
                 .unwrap_or(zcash_protocol::consensus::BranchId::Nu5),
-        ) == u32::from(zcash_protocol::consensus::BranchId::Nu7);
+        ) == u32::from(zcash_protocol::consensus::BranchId::Zsa);
 
         let orchard_raw = {
             #[cfg(feature = "zsa")]

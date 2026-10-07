@@ -422,7 +422,7 @@ pub mod v2 {
             let output_asset = [9; 32];
             let rseed_split_note = [11; 32];
             let mut pczt = Creator::new(
-                BranchId::Nu7.into(),
+                BranchId::Zsa.into(),
                 10_000_000,
                 133,
                 Some([0; 32]),
@@ -597,7 +597,7 @@ impl Pczt {
             E,
         >,
         // Extracts the ZSA issue bundle from PCZT wire format.
-        // Only relevant for Nu7 (ZSA) transactions. Callers should return
+        // Only relevant for Zsa (ZSA) transactions. Callers should return
         // `Ok(None)` if no issuance data is present or for non-ZSA branches.
         #[cfg(feature = "zsa")] extract_issue: impl FnOnce(
             &crate::issue::Bundle,
@@ -606,7 +606,7 @@ impl Pczt {
             E,
         >,
         // Extracts the ZSA-domain orchard bundle (612-byte ciphertexts) from PCZT
-        // wire format. Only called for Nu7 (ZSA) transactions.
+        // wire format. Only called for Zsa (ZSA) transactions.
         #[cfg(feature = "zsa")] extract_orchard_zsa: impl FnOnce(
             &::orchard::pczt::Bundle<::orchard::zsa::OrchardZSADomain>,
         ) -> Result<
@@ -680,12 +680,12 @@ impl Pczt {
             ::orchard::ValuePool::Orchard,
         )
         .expect("the Orchard pool is supported under every protocol revision");
-        // Parse with the domain-appropriate method. For Nu7 the builder produces
+        // Parse with the domain-appropriate method. For Zsa the builder produces
         // 612-byte ZSA ciphertexts; parse with OrchardZSADomain so the sighash
         // commitment uses ZSA indices matching the ZSA prover circuit.
         let orchard = {
             #[cfg(feature = "zsa")]
-            if consensus_branch_id == BranchId::Nu7 {
+            if consensus_branch_id == BranchId::Zsa {
                 PcztOrchardBundle::Zsa(
                     orchard
                         .into_parsed_with_version_zsa(orchard_bundle_version, anchor_requirement)
@@ -728,9 +728,9 @@ impl Pczt {
         let issue_bundle = extract_issue(&issue)?;
 
         let tx_data = match version {
-            // ZSA (Nu7) uses a different V6 layout: issue bundle instead of ironwood.
+            // ZSA (Zsa) uses a different V6 layout: issue bundle instead of ironwood.
             #[cfg(feature = "zsa")]
-            TxVersion::V6 if consensus_branch_id == BranchId::Nu7 => {
+            TxVersion::V6 if consensus_branch_id == BranchId::Zsa => {
                 TransactionData::from_parts_zsa(
                     consensus_branch_id,
                     lock_time,
@@ -754,7 +754,7 @@ impl Pczt {
                 orchard_bundle.map(|b| match b {
                     OrchardBundle::OrchardVanilla(b) => b,
                     #[cfg(feature = "zsa")]
-                    OrchardBundle::OrchardZSA(_) => panic!("ZSA in non-Nu7 V6"),
+                    OrchardBundle::OrchardZSA(_) => panic!("ZSA in non-Zsa V6"),
                     #[cfg(not(feature = "zsa"))]
                     _ => panic!("ZSA bundle requires the `zsa` feature"),
                 }),
@@ -866,7 +866,7 @@ pub(crate) fn sighash(
         TxVersion::V5 => v5_signature_hash(tx_data, signable_input, txid_parts),
         TxVersion::V6 => {
             #[cfg(feature = "zsa")]
-            if tx_data.consensus_branch_id() == BranchId::Nu7 {
+            if tx_data.consensus_branch_id() == BranchId::Zsa {
                 zsa_v6_signature_hash(tx_data, signable_input, txid_parts)
             } else {
                 v6_signature_hash(tx_data, signable_input, txid_parts)

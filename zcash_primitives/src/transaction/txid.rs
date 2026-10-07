@@ -252,7 +252,7 @@ fn hash_header_txid_data(
 
     // TODO: Factor this out into a separate txid computation when implementing ZIP 246 in full.
     #[cfg(feature = "zip-233")]
-    if consensus_branch_id == BranchId::Nu7 {
+    if consensus_branch_id == BranchId::Zsa {
         h.write_u64_le((*zip233_amount).into()).unwrap();
     }
 
@@ -496,7 +496,7 @@ pub(crate) fn to_hash_v6(
     h.finalize()
 }
 
-/// Produces the ZSA (Nu7) V6 transaction digest from its component digests.
+/// Produces the ZSA (Zsa) V6 transaction digest from its component digests.
 ///
 /// ZSA V6 combines the header, transparent, sapling, orchard, and issue bundle
 /// digests into a single BLAKE2b hash. It uses the same top-level personalization
@@ -558,7 +558,7 @@ pub fn to_txid(
     consensus_branch_id: BranchId,
     digests: &TxDigests<Blake2bHash>,
 ) -> TxId {
-    let txid_digest = if consensus_branch_id == BranchId::Nu7 {
+    let txid_digest = if consensus_branch_id == BranchId::Zsa {
         #[cfg(feature = "zsa")]
         {
             to_hash_zsa(
@@ -763,7 +763,7 @@ impl TransactionDigest<Authorized> for BlockTxCommitmentDigester {
         }
 
         #[cfg(feature = "zsa")]
-        if consensus_branch_id == BranchId::Nu7 {
+        if consensus_branch_id == BranchId::Zsa {
             h.write_all(issue_digest.as_bytes()).unwrap();
         }
 

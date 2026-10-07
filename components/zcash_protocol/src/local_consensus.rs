@@ -31,8 +31,8 @@ use crate::consensus::{BlockHeight, NetworkType, NetworkUpgrade, OrchardMode, Pa
 ///         nu6_1: Some(BlockHeight::from_u32(1)),
 ///         nu6_2: Some(BlockHeight::from_u32(1)),
 ///         nu6_3: Some(BlockHeight::from_u32(1)),
-///         #[cfg(zcash_unstable = "nu7")]
-///         nu7: Some(BlockHeight::from_u32(1)),
+///         zsa: Some(BlockHeight::from_u32(1)),
+///         orchard_mode: OrchardMode::Zsa,
 ///     };
 ///     ```
 ///
@@ -48,7 +48,8 @@ pub struct LocalNetwork {
     pub nu6_1: Option<BlockHeight>,
     pub nu6_2: Option<BlockHeight>,
     pub nu6_3: Option<BlockHeight>,
-    pub nu7: Option<BlockHeight>,
+    /// Activation height of the deployed ZSA protocol (formerly called NU7).
+    pub zsa: Option<BlockHeight>,
     /// The Orchard protocol variant for this network.
     pub orchard_mode: OrchardMode,
 }
@@ -71,7 +72,7 @@ impl Parameters for LocalNetwork {
             NetworkUpgrade::Nu6_1 => self.nu6_1,
             NetworkUpgrade::Nu6_2 => self.nu6_2,
             NetworkUpgrade::Nu6_3 => self.nu6_3,
-            NetworkUpgrade::Nu7 => self.nu7,
+            NetworkUpgrade::Zsa => self.zsa,
         }
     }
 
@@ -87,6 +88,39 @@ mod tests {
         constants,
         local_consensus::LocalNetwork,
     };
+
+    #[test]
+    fn zsa_identity_and_mode_survive_parameter_references() {
+        use crate::consensus::BranchId;
+
+        const ZSA_BRANCH_ID: u32 = 0x7719_0ad8;
+        let network = LocalNetwork {
+            overwinter: None,
+            sapling: None,
+            blossom: None,
+            heartwood: None,
+            canopy: None,
+            nu5: None,
+            nu6: None,
+            nu6_1: None,
+            nu6_2: None,
+            nu6_3: None,
+            zsa: Some(BlockHeight::from_u32(1)),
+            orchard_mode: OrchardMode::Zsa,
+        };
+        fn mode<P: Parameters>(params: P) -> OrchardMode {
+            params.orchard_mode()
+        }
+        assert_eq!(mode(network), OrchardMode::Zsa);
+        assert_eq!(mode(&network), OrchardMode::Zsa);
+        assert_eq!(mode(&&network), OrchardMode::Zsa);
+        assert_eq!(
+            BranchId::for_height(&network, BlockHeight::from_u32(1)),
+            BranchId::Zsa
+        );
+        assert_eq!(u32::from(BranchId::Zsa), ZSA_BRANCH_ID);
+        assert_eq!(BranchId::try_from(ZSA_BRANCH_ID), Ok(BranchId::Zsa));
+    }
 
     #[test]
     fn regtest_nu_activation() {
@@ -113,7 +147,7 @@ mod tests {
             nu6_1: Some(expected_nu6_1),
             nu6_2: Some(expected_nu6_2),
             nu6_3: Some(expected_nu6_3),
-            nu7: Some(expected_nu7),
+            zsa: Some(expected_nu7),
             orchard_mode: OrchardMode::Normal,
         };
 
@@ -128,7 +162,7 @@ mod tests {
         assert!(regtest.is_nu_active(NetworkUpgrade::Nu6_2, expected_nu6_2));
         assert!(regtest.is_nu_active(NetworkUpgrade::Nu6_3, expected_nu6_3));
         // nu7 must not be activated at or below the nu6_3 height
-        assert!(!regtest.is_nu_active(NetworkUpgrade::Nu7, expected_nu6_3));
+        assert!(!regtest.is_nu_active(NetworkUpgrade::Zsa, expected_nu6_3));
     }
 
     #[test]
@@ -156,7 +190,7 @@ mod tests {
             nu6_1: Some(expected_nu6_1),
             nu6_2: Some(expected_nu6_2),
             nu6_3: Some(expected_nu6_3),
-            nu7: Some(expected_nu7),
+            zsa: Some(expected_nu7),
             orchard_mode: OrchardMode::Normal,
         };
 
@@ -201,7 +235,7 @@ mod tests {
             Some(expected_nu6_3)
         );
         assert_eq!(
-            regtest.activation_height(NetworkUpgrade::Nu7),
+            regtest.activation_height(NetworkUpgrade::Zsa),
             Some(expected_nu7)
         );
     }
@@ -231,7 +265,7 @@ mod tests {
             nu6_1: Some(expected_nu6_1),
             nu6_2: Some(expected_nu6_2),
             nu6_3: Some(expected_nu6_3),
-            nu7: Some(expected_nu7),
+            zsa: Some(expected_nu7),
             orchard_mode: OrchardMode::Normal,
         };
 

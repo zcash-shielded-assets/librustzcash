@@ -77,7 +77,7 @@ impl<'a> TransactionExtractor<'a> {
             _unused,
         } = self;
 
-        // Save the signed issue bundle before extraction (Nu7/ZSA).
+        // Save the signed issue bundle before extraction (Zsa/ZSA).
         // The Issuer Phase 2 should have already signed it.
         #[cfg(feature = "zsa")]
         let saved_signed_issue = pczt.issue.to_signed();
@@ -119,8 +119,8 @@ impl<'a> TransactionExtractor<'a> {
         let shielded_sighash = signature_hash(&tx_data, &SignableInput::Shielded, &txid_parts);
         // Create the binding signatures.
         #[cfg(feature = "zsa")]
-        let tx_data = if consensus_branch_id == zcash_protocol::consensus::BranchId::Nu7 {
-            // ZSA (Nu7): preserve the signed issue bundle through binding
+        let tx_data = if consensus_branch_id == zcash_protocol::consensus::BranchId::Zsa {
+            // ZSA (Zsa): preserve the signed issue bundle through binding
             // signature application.
             tx_data.try_map_bundles_zsa(
                 |t| Ok(t.map(|t| t.map_authorization(transparent::RemoveInputInfo))),

@@ -445,6 +445,10 @@ impl<P: Parameters> Parameters for &P {
     fn activation_height(&self, nu: NetworkUpgrade) -> Option<BlockHeight> {
         (*self).activation_height(nu)
     }
+
+    fn orchard_mode(&self) -> OrchardMode {
+        (*self).orchard_mode()
+    }
 }
 
 impl<P: Parameters> private::Sealed for P {}
@@ -526,7 +530,7 @@ impl Parameters for MainNetwork {
             NetworkUpgrade::Nu6_1 => Some(BlockHeight(3_146_400)),
             NetworkUpgrade::Nu6_2 => Some(BlockHeight(3_364_600)),
             NetworkUpgrade::Nu6_3 => Some(BlockHeight(3_428_143)),
-            NetworkUpgrade::Nu7 => None,
+            NetworkUpgrade::Zsa => None,
         }
     }
 }
@@ -558,7 +562,7 @@ impl Parameters for TestNetwork {
             NetworkUpgrade::Nu6_1 => Some(BlockHeight(3_536_500)),
             NetworkUpgrade::Nu6_2 => Some(BlockHeight(4_052_000)),
             NetworkUpgrade::Nu6_3 => Some(BlockHeight(4_134_000)),
-            NetworkUpgrade::Nu7 => None,
+            NetworkUpgrade::Zsa => None,
         }
     }
 }
@@ -635,10 +639,8 @@ pub enum NetworkUpgrade {
     Nu6_2,
     /// The Ironwood / NU6.3 network upgrade.
     Nu6_3,
-    /// The [Nu7 (proposed)] network upgrade.
-    ///
-    /// [Nu7 (proposed)]: https://z.cash/upgrade/nu7/
-    Nu7,
+    /// The deployed Zcash Shielded Assets protocol, independent of official NU7.
+    Zsa,
 }
 
 #[cfg(feature = "std")]
@@ -657,7 +659,7 @@ impl fmt::Display for NetworkUpgrade {
             NetworkUpgrade::Nu6_1 => write!(f, "Nu6.1"),
             NetworkUpgrade::Nu6_2 => write!(f, "Nu6.2"),
             NetworkUpgrade::Nu6_3 => write!(f, "Nu6.3"),
-            NetworkUpgrade::Nu7 => write!(f, "Nu7"),
+            NetworkUpgrade::Zsa => write!(f, "Zsa"),
         }
     }
 }
@@ -678,7 +680,7 @@ impl NetworkUpgrade {
             NetworkUpgrade::Nu6_1 => BranchId::Nu6_1,
             NetworkUpgrade::Nu6_2 => BranchId::Nu6_2,
             NetworkUpgrade::Nu6_3 => BranchId::Nu6_3,
-            NetworkUpgrade::Nu7 => BranchId::Nu7,
+            NetworkUpgrade::Zsa => BranchId::Zsa,
         }
     }
 }
@@ -698,7 +700,7 @@ const UPGRADES_IN_ORDER: &[NetworkUpgrade] = &[
     NetworkUpgrade::Nu6_1,
     NetworkUpgrade::Nu6_2,
     NetworkUpgrade::Nu6_3,
-    NetworkUpgrade::Nu7,
+    NetworkUpgrade::Zsa,
 ];
 
 /// The "grace period" defined in [ZIP 212].
@@ -752,8 +754,8 @@ pub enum BranchId {
     Nu6_2,
     /// The consensus rules to be deployed by [`NetworkUpgrade::Nu6_3`].
     Nu6_3,
-    /// The consensus rules to be deployed by [`NetworkUpgrade::Nu7`].
-    Nu7,
+    /// The deployed consensus rules for [`NetworkUpgrade::Zsa`].
+    Zsa,
 }
 
 #[cfg(feature = "std")]
@@ -775,7 +777,7 @@ impl TryFrom<u32> for BranchId {
             0x4dec_4df0 => Ok(BranchId::Nu6_1),
             0x5437_f330 => Ok(BranchId::Nu6_2),
             0x37a5_165b => Ok(BranchId::Nu6_3),
-            0x7719_0ad8 => Ok(BranchId::Nu7), // ZSA
+            0x7719_0ad8 => Ok(BranchId::Zsa), // ZSA
             _ => Err("Unknown consensus branch ID"),
         }
     }
@@ -795,7 +797,7 @@ impl From<BranchId> for u32 {
             BranchId::Nu6_1 => 0x4dec_4df0,
             BranchId::Nu6_2 => 0x5437_f330,
             BranchId::Nu6_3 => 0x37a5_165b,
-            BranchId::Nu7 => 0x7719_0ad8, // ZSA
+            BranchId::Zsa => 0x7719_0ad8, // ZSA
         }
     }
 }
@@ -833,7 +835,7 @@ impl BranchId {
             BranchId::Nu6_1 => NetworkUpgrade::Nu6_1,
             BranchId::Nu6_2 => NetworkUpgrade::Nu6_2,
             BranchId::Nu6_3 => NetworkUpgrade::Nu6_3,
-            BranchId::Nu7 => NetworkUpgrade::Nu7,
+            BranchId::Zsa => NetworkUpgrade::Zsa,
         })
     }
 
@@ -895,11 +897,11 @@ impl BranchId {
             BranchId::Nu6_3 => params
                 .activation_height(NetworkUpgrade::Nu6_3)
                 .map(|lower| {
-                    let upper = params.activation_height(NetworkUpgrade::Nu7);
+                    let upper = params.activation_height(NetworkUpgrade::Zsa);
                     (lower, upper)
                 }),
-            BranchId::Nu7 => params
-                .activation_height(NetworkUpgrade::Nu7)
+            BranchId::Zsa => params
+                .activation_height(NetworkUpgrade::Zsa)
                 .map(|lower| (lower, None)),
         }
     }
@@ -915,7 +917,7 @@ impl BranchId {
             Sprout | Overwinter | Sapling | Blossom | Heartwood | Canopy | Nu5 | Nu6 | Nu6_1
             | Nu6_2 => true,
             BranchId::Nu6_3 => true,
-            BranchId::Nu7 => false,
+            BranchId::Zsa => false,
         }
     }
 
@@ -926,7 +928,7 @@ impl BranchId {
             Sprout | Overwinter => false,
             Sapling | Blossom | Heartwood | Canopy | Nu5 | Nu6 | Nu6_1 | Nu6_2 => true,
             BranchId::Nu6_3 => true,
-            BranchId::Nu7 => true,
+            BranchId::Zsa => true,
         }
     }
 
@@ -937,7 +939,7 @@ impl BranchId {
             Sprout | Overwinter | Sapling | Blossom | Heartwood | Canopy => false,
             Nu5 | Nu6 | Nu6_1 | Nu6_2 => true,
             BranchId::Nu6_3 => true,
-            BranchId::Nu7 => true,
+            BranchId::Zsa => true,
         }
     }
 
@@ -951,7 +953,7 @@ impl BranchId {
             Nu5 | Nu6 | Nu6_1 => Some(OrchardProtocolRevision::InsecureV1),
             Nu6_2 => Some(OrchardProtocolRevision::V2),
             Nu6_3 => Some(OrchardProtocolRevision::V3),
-            Nu7 => Some(OrchardProtocolRevision::ZSA),
+            Zsa => Some(OrchardProtocolRevision::ZSA),
         }
     }
 }
@@ -1003,7 +1005,7 @@ pub mod testing {
             BranchId::Nu6_1,
             BranchId::Nu6_2,
             BranchId::Nu6_3,
-            BranchId::Nu7,
+            BranchId::Zsa,
         ])
     }
 
@@ -1106,7 +1108,7 @@ mod tests {
             Some(OrchardProtocolRevision::V3)
         );
         assert_eq!(
-            BranchId::Nu7.orchard_protocol_revision(),
+            BranchId::Zsa.orchard_protocol_revision(),
             Some(OrchardProtocolRevision::ZSA)
         );
     }

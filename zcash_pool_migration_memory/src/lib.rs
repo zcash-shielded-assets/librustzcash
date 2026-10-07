@@ -101,7 +101,7 @@ pub fn regtest_network(nu6_3_active: bool) -> LocalNetwork {
         nu6_1: Some(BlockHeight::from_u32(8)),
         nu6_2: Some(BlockHeight::from_u32(9)),
         nu6_3,
-        nu7: None,
+        zsa: None,
         orchard_mode: zcash_protocol::consensus::OrchardMode::Normal,
     }
 }

@@ -215,7 +215,7 @@ pub fn read_v5_bundle<R: Read>(
 /// slot ([`BundleVersion::ironwood_v3`]). A pre-NU6.3 version would (de)serialize the flag byte
 /// with the wrong cross-address (bit 2) semantics.
 fn check_v6_bundle_version(bundle_version: BundleVersion) -> io::Result<()> {
-    // ZSA (Nu7) uses V6 tx format with V2 orchard protocol revision.
+    // ZSA (Zsa) uses V6 tx format with V2 orchard protocol revision.
     if bundle_version == BundleVersion::orchard_v2()
         || bundle_version == BundleVersion::orchard_v3()
         || bundle_version == BundleVersion::ironwood_v3()
@@ -470,7 +470,7 @@ pub mod testing {
         v: TxVersion,
         branch_id: BranchId,
     ) -> impl Strategy<Value = Option<OrchardBundle<Authorized>>> {
-        if branch_id == BranchId::Nu7 {
+        if branch_id == BranchId::Zsa {
             // The existing arbitrary-action generator produces OrchardDomain
             // ciphertexts. Do not mislabel those as OrchardZSADomain bundles.
             // A domain-correct ZSA action generator can replace this empty
@@ -502,7 +502,7 @@ pub mod testing {
         v: TxVersion,
         branch_id: BranchId,
     ) -> impl Strategy<Value = Option<Bundle<Authorized, ZatBalance>>> {
-        if v.has_ironwood() && branch_id != BranchId::Nu7 {
+        if v.has_ironwood() && branch_id != BranchId::Zsa {
             (1usize..100)
                 .prop_flat_map(|n| {
                     prop::option::of(

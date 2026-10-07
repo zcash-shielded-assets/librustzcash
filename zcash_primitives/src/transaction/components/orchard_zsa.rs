@@ -1,4 +1,4 @@
-//! ZSA (Nu7) V6 orchard bundle serialization — ported from Zebra's format.
+//! ZSA (Zsa) V6 orchard bundle serialization — ported from Zebra's format.
 
 use alloc::vec::Vec;
 use corez::io::{self, Read, Write};

@@ -1697,7 +1697,7 @@ mod tests {
         ])
     }
 
-    // The network upgrades from which the Orchard pool disables cross-address transfers. `Nu7` is
+    // The network upgrades from which the Orchard pool disables cross-address transfers. `Zsa` is
     // excluded: it has no activation height on any network yet, so no bundle can be built for it.
     fn arb_nu6_3_or_later_upgrade() -> impl Strategy<Value = NetworkUpgrade> {
         prop::sample::select(vec![NetworkUpgrade::Nu6_3])
