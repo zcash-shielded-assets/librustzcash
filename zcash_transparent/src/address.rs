@@ -1,5 +1,6 @@
 //! Support for legacy transparent addresses and scripts.
 
+use alloc::vec::Vec;
 use core::fmt;
 use corez::io::{self, Read, Write};
 
@@ -208,6 +209,33 @@ impl TransparentAddress {
             TransparentAddress::ScriptHash(data) => ZcashAddress::from_transparent_p2sh(net, *data),
         }
     }
+}
+
+/// Returns the encoding of `pubkey` whose HASH160 is `hash`: the 33-byte compressed
+/// encoding, or the 65-byte uncompressed encoding of the same point. Returns `None` if
+/// neither matches.
+///
+/// Both encodings name the same key, and a P2PKH coin commits to exactly one of them;
+/// its `script_sig` must push that one. PCZTs key transparent pubkeys by their
+/// compressed encoding, so this is how the uncompressed encoding is recovered when a
+/// coin needs it. Without the `transparent-inputs` feature, only the compressed
+/// encoding is recognised.
+pub(crate) fn p2pkh_pubkey_encoding(hash: &[u8; 20], pubkey: &[u8; 33]) -> Option<Vec<u8>> {
+    if crate::util::hash160::hash(pubkey) == *hash {
+        return Some(pubkey.to_vec());
+    }
+
+    #[cfg(feature = "transparent-inputs")]
+    {
+        let uncompressed = secp256k1::PublicKey::from_slice(pubkey)
+            .ok()?
+            .serialize_uncompressed();
+        if crate::util::hash160::hash(&uncompressed) == *hash {
+            return Some(uncompressed.to_vec());
+        }
+    }
+
+    None
 }
 
 impl TryFromAddress for TransparentAddress {

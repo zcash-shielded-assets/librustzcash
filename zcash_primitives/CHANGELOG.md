@@ -15,6 +15,12 @@ workspace.
   period at the NU5 activation height when that comes first. Mainnet and testnet
   are unaffected; on regtest-style networks where every upgrade activates at
   height 1, ZIP 212 is enforced from the start so Sapling PCZTs can be built.
+- `transaction::fees::transparent::InputView::serialized_size` for a
+  `TransparentInputInfo` prices a P2PKH input spending an uncompressed-key coin
+  at its exact size (the standard 150 bytes plus the 32 extra pubkey bytes,
+  less the one byte the standard size rounds up) instead of the standard size,
+  matching what the network charges under ZIP 317. Compressed-key coins are
+  unchanged.
 
 ### ZSA compatibility
 - ZSA transaction construction, serialization, transaction IDs, and signing hashes

@@ -149,15 +149,12 @@ impl TransparentSigningSet {
 
 // Helper function within the transparent-inputs feature gate
 #[cfg(feature = "transparent-inputs")]
-fn construct_script_sig(
-    signature: &secp256k1::ecdsa::Signature,
-    pubkey: &secp256k1::PublicKey,
-) -> script::Sig {
+fn construct_script_sig(signature: &secp256k1::ecdsa::Signature, pubkey: &[u8]) -> script::Sig {
     let mut sig_bytes: Vec<u8> = signature.serialize_der().to_vec();
     sig_bytes.push(SIGHASH_ALL);
     script::Component(vec![
         pv::push_value(&sig_bytes).expect("short enough"),
-        pv::push_value(&pubkey.serialize()).expect("short enough"),
+        pv::push_value(pubkey).expect("short enough"),
     ])
 }
 
@@ -179,26 +176,28 @@ pub struct TransparentInputInfo {
     utxo: OutPoint,
     coin: TxOut,
     spend_info: SpendInfo,
+    /// For a P2PKH coin, the encoding of the pubkey that the coin commits to (compressed
+    /// or uncompressed), which is what the `script_sig` must push. `None` for P2SH.
+    p2pkh_pubkey: Option<Vec<u8>>,
 }
 
 #[cfg(feature = "transparent-inputs")]
 impl TransparentInputInfo {
     /// Constructs a [`TransparentInputInfo`] value from its constituent parts.
     pub fn from_parts(utxo: OutPoint, coin: TxOut, spend_info: SpendInfo) -> Result<Self, Error> {
-        match &spend_info {
+        let p2pkh_pubkey = match &spend_info {
             SpendInfo::P2pkh { pubkey } => {
                 let script_pubkey = script::PubKey::parse(&coin.script_pubkey().0)
                     .map_err(|_| Error::UnsupportedScript)?;
 
                 // Ensure that the RIPEMD-160 digest of the public key associated with the
                 // provided secret key matches that of the address to which the provided
-                // output may be spent.
+                // output may be spent. The coin may commit to either encoding of the key.
                 match TransparentAddress::from_script_pubkey(&script_pubkey) {
-                    Some(TransparentAddress::PublicKeyHash(hash)) => {
-                        if hash != crate::util::hash160::hash(&pubkey.serialize()) {
-                            return Err(Error::InvalidAddress);
-                        }
-                    }
+                    Some(TransparentAddress::PublicKeyHash(hash)) => Some(
+                        crate::address::p2pkh_pubkey_encoding(&hash, &pubkey.serialize())
+                            .ok_or(Error::InvalidAddress)?,
+                    ),
                     _ => return Err(Error::InvalidAddress),
                 }
             }
@@ -218,13 +217,15 @@ impl TransparentInputInfo {
                     }
                     _ => return Err(Error::InvalidAddress),
                 }
+                None
             }
-        }
+        };
 
         Ok(TransparentInputInfo {
             utxo,
             coin,
             spend_info,
+            p2pkh_pubkey,
         })
     }
 
@@ -252,8 +253,11 @@ impl TransparentInputInfo {
         match &self.spend_info {
             SpendInfo::P2pkh { .. } => {
                 let fake_sig = pv::push_value(&[0; MAX_SIG_SIZE]).expect("short enough");
-                let fake_pubkey = pv::push_value(&[0; secp256k1::constants::PUBLIC_KEY_SIZE])
-                    .expect("short enough");
+                let pubkey_len = self
+                    .p2pkh_pubkey
+                    .as_ref()
+                    .map_or(secp256k1::constants::PUBLIC_KEY_SIZE, Vec::len);
+                let fake_pubkey = pv::push_value(&vec![0; pubkey_len]).expect("short enough");
                 let script_len = script::Component(vec![fake_sig, fake_pubkey]).byte_len();
                 let script_sig_len = CompactSize::serialized_size(script_len) + script_len;
                 Some(PREVOUT_SIZE + script_sig_len + SEQUENCE_SIZE)
@@ -640,7 +644,12 @@ impl Bundle<Unauthorized> {
                         let msg = secp256k1::Message::from_digest(sighash);
                         let sig = secp256k1::ecdsa::sign(msg, sk);
 
-                        Ok(construct_script_sig(&sig, pubkey))
+                        Ok(construct_script_sig(
+                            &sig,
+                            info.p2pkh_pubkey
+                                .as_deref()
+                                .expect("set by from_parts for P2PKH"),
+                        ))
                     }
                     SpendInfo::P2sh { redeem_script } => {
                         let refined = redeem_script
@@ -820,17 +829,22 @@ impl TransparentSignatureContext {
                     // This signature was already valid for a different input.
                     return Err(Error::DuplicateSignature);
                 }
-                matched_input_idx = Some((input_idx, pubkey));
+                matched_input_idx = Some(input_idx);
             }
         }
 
-        if let Some((final_input_idx, pubkey)) = matched_input_idx {
+        if let Some(final_input_idx) = matched_input_idx {
             // Check if another signature has already been applied to this input.
             if self.final_script_sigs[final_input_idx].is_some() {
                 return Err(Error::DuplicateSignature);
             }
 
-            // Apply the signature.
+            // Apply the signature, pushing the encoding of the pubkey that the coin
+            // commits to.
+            let pubkey = self.authorization_inputs[final_input_idx]
+                .p2pkh_pubkey
+                .as_deref()
+                .expect("set by from_parts for P2PKH");
             self.final_script_sigs[final_input_idx] = Some(construct_script_sig(signature, pubkey));
 
             Ok(self)
@@ -879,8 +893,11 @@ impl TransparentSignatureContext {
 mod tests {
     use std::vec::Vec;
 
-    use super::{Error, OutPoint, SignableInput, TransparentBuilder, TxOut};
-    use crate::address::TransparentAddress;
+    use super::{
+        Error, OutPoint, SignableInput, SpendInfo, TransparentBuilder, TransparentInputInfo,
+        TransparentSigningSet, TxOut,
+    };
+    use crate::address::{Script, TransparentAddress};
     use secp256k1::{Message, SecretKey};
     use zcash_address::ZcashAddress;
     use zcash_protocol::value::Zatoshis;
@@ -1134,6 +1151,120 @@ mod tests {
 
         let result = bundle.apply_signatures(calculate_sighash, &signing_set);
         assert!(result.is_ok(), "P2SH apply_signatures failed: {result:?}");
+    }
+
+    // Helper that creates a coin paying to the uncompressed encoding of the key, as old
+    // paper wallets do.
+    fn new_uncompressed_p2pkh_spend_with_key(
+        key_bytes: [u8; 32],
+    ) -> (SecretKey, secp256k1::PublicKey, TxOut, OutPoint) {
+        let sk = SecretKey::from_secret_bytes(key_bytes).expect("32 bytes is a valid secret key");
+        let pk = secp256k1::PublicKey::from_secret_key(&sk);
+
+        let taddr = TransparentAddress::PublicKeyHash(crate::util::hash160::hash(
+            &pk.serialize_uncompressed(),
+        ));
+
+        let txout = TxOut::new(Zatoshis::from_u64(10000).unwrap(), taddr.script().into());
+
+        (sk, pk, txout, OutPoint::new([0u8; 32], 1))
+    }
+
+    /// Asserts that a P2PKH `script_sig` ends by pushing exactly `pubkey`.
+    fn assert_pushes_pubkey(script_sig: &Script, pubkey: &[u8]) {
+        let mut expected = vec![u8::try_from(pubkey.len()).unwrap()];
+        expected.extend_from_slice(pubkey);
+        assert!(
+            script_sig.0.0.ends_with(&expected),
+            "script_sig {:02x?} does not push {pubkey:02x?}",
+            script_sig.0.0
+        );
+    }
+
+    #[test]
+    fn p2pkh_input_may_pay_to_either_pubkey_encoding() {
+        let (_, pk, coin, utxo) = new_p2pkh_spend_with_key([1; 32]);
+        let (_, pk_u, coin_u, utxo_u) = new_uncompressed_p2pkh_spend_with_key([1; 32]);
+        let (_, other_pk, _, _) = new_p2pkh_spend_with_key([2; 32]);
+
+        let compressed = TransparentInputInfo::from_parts(
+            utxo.clone(),
+            coin.clone(),
+            SpendInfo::P2pkh { pubkey: pk },
+        )
+        .expect("coin at the compressed address");
+        let uncompressed = TransparentInputInfo::from_parts(
+            utxo_u.clone(),
+            coin_u.clone(),
+            SpendInfo::P2pkh { pubkey: pk_u },
+        )
+        .expect("coin at the uncompressed address");
+
+        // Spending an uncompressed-key coin pushes 32 more bytes of pubkey.
+        assert_eq!(
+            uncompressed.serialized_len(),
+            compressed.serialized_len().map(|len| len + 32)
+        );
+
+        // A coin at another key's address is still refused, whichever encoding it uses.
+        assert_eq!(
+            TransparentInputInfo::from_parts(utxo, coin, SpendInfo::P2pkh { pubkey: other_pk })
+                .unwrap_err(),
+            Error::InvalidAddress
+        );
+        assert_eq!(
+            TransparentInputInfo::from_parts(utxo_u, coin_u, SpendInfo::P2pkh { pubkey: other_pk })
+                .unwrap_err(),
+            Error::InvalidAddress
+        );
+    }
+
+    #[test]
+    fn apply_signatures_pushes_the_pubkey_encoding_the_coin_commits_to() {
+        let (sk, pk, coin, utxo) = new_p2pkh_spend_with_key([1; 32]);
+        let (sk_u, pk_u, coin_u, utxo_u) = new_uncompressed_p2pkh_spend_with_key([2; 32]);
+
+        let mut builder = TransparentBuilder::empty();
+        builder.add_p2pkh_input(pk, utxo, coin).unwrap();
+        builder.add_p2pkh_input(pk_u, utxo_u, coin_u).unwrap();
+        let bundle = builder.build().unwrap();
+
+        let mut signing_set = TransparentSigningSet::new();
+        signing_set.add_key(sk);
+        signing_set.add_key(sk_u);
+
+        let bundle = bundle
+            .apply_signatures(|input| [input.index as u8; 32], &signing_set)
+            .expect("both coins sign");
+
+        assert_pushes_pubkey(bundle.vin[0].script_sig(), &pk.serialize());
+        assert_pushes_pubkey(bundle.vin[1].script_sig(), &pk_u.serialize_uncompressed());
+    }
+
+    #[test]
+    fn external_signatures_push_the_pubkey_encoding_the_coin_commits_to() {
+        let (sk, pk, coin, utxo) = new_p2pkh_spend_with_key([1; 32]);
+        let (sk_u, pk_u, coin_u, utxo_u) = new_uncompressed_p2pkh_spend_with_key([2; 32]);
+
+        let mut builder = TransparentBuilder::empty();
+        builder.add_p2pkh_input(pk, utxo, coin).unwrap();
+        builder.add_p2pkh_input(pk_u, utxo_u, coin_u).unwrap();
+        let bundle = builder.build().unwrap();
+
+        let sig_context = bundle
+            .prepare_transparent_signatures(|input| [input.index as u8; 32])
+            .unwrap();
+        let sig = secp256k1::ecdsa::sign(Message::from_digest(sig_context.sighashes[0]), &sk);
+        let sig_u = secp256k1::ecdsa::sign(Message::from_digest(sig_context.sighashes[1]), &sk_u);
+
+        let bundle = sig_context
+            .append_external_signatures(&[sig, sig_u])
+            .expect("both signatures match a coin")
+            .finalize_signatures()
+            .expect("every coin is signed");
+
+        assert_pushes_pubkey(bundle.vin[0].script_sig(), &pk.serialize());
+        assert_pushes_pubkey(bundle.vin[1].script_sig(), &pk_u.serialize_uncompressed());
     }
 
     #[test]

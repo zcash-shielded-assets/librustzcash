@@ -59,21 +59,23 @@ impl Bundle {
                             (Some(_), Some(_)) => Err(SpendFinalizerError::UnexpectedSignatures),
                         }
                         .and_then(|(pubkey, sig_bytes)| {
-                            // Check that the signature is for this input.
-                            if hash[..] != crate::util::hash160::hash(pubkey)[..] {
-                                Err(SpendFinalizerError::UnexpectedSignatures)
-                            } else {
-                                check_sighash_type(sig_bytes, input.sighash_type, sighash_policy)?;
+                            // Check that the signature is for this input, and find the
+                            // encoding of its pubkey that the coin commits to: the
+                            // signature is keyed by the compressed encoding, but the coin
+                            // may pay to the uncompressed one.
+                            let pubkey = crate::address::p2pkh_pubkey_encoding(&hash, pubkey)
+                                .ok_or(SpendFinalizerError::UnexpectedSignatures)?;
 
-                                // P2PKH scriptSig
-                                input.script_sig = Some(script::Component(vec![
-                                    pv::push_value(sig_bytes)
-                                        .ok_or(SpendFinalizerError::InvalidSignature)?,
-                                    pv::push_value(pubkey)
-                                        .ok_or(SpendFinalizerError::InvalidSignature)?,
-                                ]));
-                                Ok(())
-                            }
+                            check_sighash_type(sig_bytes, input.sighash_type, sighash_policy)?;
+
+                            // P2PKH scriptSig
+                            input.script_sig = Some(script::Component(vec![
+                                pv::push_value(sig_bytes)
+                                    .ok_or(SpendFinalizerError::InvalidSignature)?,
+                                pv::push_value(&pubkey)
+                                    .ok_or(SpendFinalizerError::InvalidSignature)?,
+                            ]));
+                            Ok(())
                         })
                     }
                     TransparentAddress::ScriptHash(_) => {

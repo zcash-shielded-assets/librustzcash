@@ -340,8 +340,8 @@ pub(crate) mod testing {
 
     use super::Input;
 
-    /// The P2PKH `script_pubkey` paying to `pubkey`.
-    pub(crate) fn p2pkh(pubkey: &[u8; 33]) -> script::FromChain {
+    /// The P2PKH `script_pubkey` paying to `pubkey`, in either encoding.
+    pub(crate) fn p2pkh(pubkey: &[u8]) -> script::FromChain {
         TransparentAddress::PublicKeyHash(hash160::hash(pubkey))
             .script()
             .weaken()
@@ -395,5 +395,108 @@ pub(crate) mod testing {
             hash256_preimages: BTreeMap::new(),
             proprietary: BTreeMap::new(),
         }
+    }
+}
+
+#[cfg(all(test, feature = "transparent-inputs"))]
+mod tests {
+    use alloc::vec;
+
+    use zcash_script::script::Evaluable;
+
+    use super::{
+        Bundle, Input,
+        testing::{input, p2pkh},
+    };
+    use crate::{sighash::SighashType, util::hash160};
+
+    /// The stub sighash that both signing paths are given.
+    const SIGHASH: [u8; 32] = [0; 32];
+
+    fn secret_key(i: u8) -> secp256k1::SecretKey {
+        secp256k1::SecretKey::from_secret_bytes([i; 32]).expect("valid")
+    }
+
+    /// A P2PKH input paying to `pubkey`, in either encoding, with the `hash160` preimage
+    /// that `Input::append_signature` needs.
+    fn p2pkh_input(pubkey: &[u8]) -> Input {
+        let mut input = input(p2pkh(pubkey), None, SighashType::ALL);
+        input
+            .hash160_preimages
+            .insert(hash160::hash(pubkey), pubkey.to_vec());
+        input
+    }
+
+    /// Asserts that a finalized P2PKH input's `script_sig` ends by pushing exactly
+    /// `pubkey`.
+    fn assert_pushes_pubkey(input: &Input, pubkey: &[u8]) {
+        let mut expected = vec![u8::try_from(pubkey.len()).unwrap()];
+        expected.extend_from_slice(pubkey);
+        let script_sig = input.script_sig.as_ref().expect("finalized").to_bytes();
+        assert!(
+            script_sig.ends_with(&expected),
+            "script_sig {script_sig:02x?} does not push {pubkey:02x?}"
+        );
+    }
+
+    /// One compressed-key coin signed with its secret key, and one uncompressed-key coin
+    /// signed externally (the path a wallet takes when it computes the sighash itself),
+    /// ready for the Spend Finalizer.
+    fn signed_mixed_bundle() -> Bundle {
+        let sk = secret_key(1);
+        let sk_u = secret_key(2);
+        let pk = sk.public_key().serialize();
+        let pk_u = sk_u.public_key().serialize_uncompressed();
+
+        let mut bundle = Bundle {
+            inputs: vec![p2pkh_input(&pk), p2pkh_input(&pk_u)],
+            outputs: vec![],
+        };
+
+        bundle.inputs[0]
+            .sign(0, |_| SIGHASH, &sk)
+            .expect("compressed-key coin signs with its secret key");
+        let sig = secp256k1::ecdsa::sign(secp256k1::Message::from_digest(SIGHASH), &sk_u);
+        bundle.inputs[1]
+            .append_signature(1, |_| SIGHASH, sig)
+            .expect("uncompressed-key coin accepts an external signature");
+
+        // Whatever encoding the coin pays to, the signature is keyed by the compressed
+        // one, so the PCZT encoding is unchanged.
+        assert!(
+            bundle.inputs[1]
+                .partial_signatures
+                .contains_key(&sk_u.public_key().serialize())
+        );
+
+        bundle
+    }
+
+    #[test]
+    fn finalized_script_sig_pushes_the_pubkey_encoding_the_coin_commits_to() {
+        let mut bundle = signed_mixed_bundle();
+        bundle.finalize_spends().expect("both coins finalize");
+
+        assert_pushes_pubkey(&bundle.inputs[0], &secret_key(1).public_key().serialize());
+        assert_pushes_pubkey(
+            &bundle.inputs[1],
+            &secret_key(2).public_key().serialize_uncompressed(),
+        );
+    }
+
+    #[test]
+    fn finalizing_does_not_need_the_hash160_preimages() {
+        let mut bundle = signed_mixed_bundle();
+        // A Redactor may strip the preimages before the Spend Finalizer runs; the coin
+        // itself says which encoding to push.
+        for input in &mut bundle.inputs {
+            input.hash160_preimages.clear();
+        }
+        bundle.finalize_spends().expect("both coins finalize");
+
+        assert_pushes_pubkey(
+            &bundle.inputs[1],
+            &secret_key(2).public_key().serialize_uncompressed(),
+        );
     }
 }

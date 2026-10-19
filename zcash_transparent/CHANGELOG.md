@@ -10,6 +10,17 @@ workspace.
 
 ## [Unreleased]
 
+### Fixed
+- A P2PKH coin paying to the uncompressed encoding of its pubkey can now be
+  spent. `zcash_transparent::builder::TransparentInputInfo::from_parts`, the
+  PCZT Signer (`Input::sign` and `Input::append_signature`) and the PCZT Spend
+  Finalizer accept a coin whose script hash matches either encoding of the key,
+  and the `script_sig` pushes the encoding that the coin commits to. PCZT
+  `partial_signatures` stay keyed by the compressed encoding, so the PCZT
+  format is unchanged. Such coins were previously refused with
+  `builder::Error::InvalidAddress`. `TransparentInputInfo::serialized_len` now
+  accounts for the 65-byte pubkey in such a spend.
+
 ## [0.11.0-pre.1] - 2026-10-06
 
 ### Changed

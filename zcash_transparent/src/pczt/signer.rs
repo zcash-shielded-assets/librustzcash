@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 use zcash_script::solver;
 
 use crate::{
-    address::{Script, TransparentAddress},
+    address::Script,
     sighash::{SighashPolicy, SighashType, SignableInput},
 };
 
@@ -127,13 +127,12 @@ impl Input {
         self.verify_for_signing()?;
 
         let pubkey = sk.public_key().serialize();
-        let p2pkh_addr = TransparentAddress::from_pubkey_bytes(&pubkey);
 
         // For P2PKH, `script_code` is always the same as `script_pubkey`.
         let script_code = self.redeem_script.as_ref().unwrap_or(&self.script_pubkey);
 
         // Check that the corresponding pubkey appears in either `script_pubkey` or
-        // `redeem_script`.
+        // `redeem_script`. A P2PKH coin may commit to either encoding of the key.
         match script_code
             .refine()
             .ok()
@@ -141,7 +140,7 @@ impl Input {
             .and_then(solver::standard)
         {
             Some(solver::ScriptKind::PubKeyHash { hash })
-                if TransparentAddress::PublicKeyHash(hash) == p2pkh_addr =>
+                if crate::address::p2pkh_pubkey_encoding(&hash, &pubkey).is_some() =>
             {
                 Ok(())
             }
@@ -254,7 +253,11 @@ impl Input {
                     .hash160_preimages()
                     .get(&hash)
                     .ok_or(SignerError::MissingPreimage)?;
-                to_pubkey(data).map(|pubkey| vec![pubkey])
+                // The preimage is whichever encoding the coin commits to, compressed or
+                // uncompressed; the signature is recorded under the compressed one.
+                secp256k1::PublicKey::from_slice(data)
+                    .map(|pk| vec![pk.serialize()])
+                    .map_err(|_| SignerError::UnsupportedPubkey)
             }
             Some(solver::ScriptKind::MultiSig { pubkeys, .. }) => pubkeys
                 .iter()
@@ -424,6 +427,17 @@ mod tests {
         let mut input = input(p2pkh(&pubkey(&sk)), None, SighashType::ALL);
 
         assert!(sign(&mut input, &sk, SighashPolicy::ALL_ONLY).is_ok());
+        assert!(input.partial_signatures.contains_key(&pubkey(&sk)));
+    }
+
+    #[test]
+    fn sign_accepts_uncompressed_p2pkh() {
+        let sk = secret_key(1);
+        let uncompressed = sk.public_key().serialize_uncompressed();
+        let mut input = input(p2pkh(&uncompressed), None, SighashType::ALL);
+
+        assert!(sign(&mut input, &sk, SighashPolicy::ALL_ONLY).is_ok());
+        // Recorded under the compressed encoding, as every PCZT signature is.
         assert!(input.partial_signatures.contains_key(&pubkey(&sk)));
     }
 
