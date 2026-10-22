@@ -100,6 +100,8 @@ mod tests {
     };
 
     #[test]
+    // The references are the point of this test: `Parameters` is implemented for `&P`.
+    #[allow(clippy::needless_borrows_for_generic_args)]
     fn zsa_identity_and_mode_survive_parameter_references() {
         use crate::consensus::BranchId;
 
@@ -310,25 +312,5 @@ mod tests {
         };
 
         assert_eq!(regtest.coin_type(), constants::regtest::COIN_TYPE);
-        assert_eq!(
-            regtest.hrp_sapling_extended_spending_key(),
-            constants::regtest::HRP_SAPLING_EXTENDED_SPENDING_KEY
-        );
-        assert_eq!(
-            regtest.hrp_sapling_extended_full_viewing_key(),
-            constants::regtest::HRP_SAPLING_EXTENDED_FULL_VIEWING_KEY
-        );
-        assert_eq!(
-            regtest.hrp_sapling_payment_address(),
-            constants::regtest::HRP_SAPLING_PAYMENT_ADDRESS
-        );
-        assert_eq!(
-            regtest.b58_pubkey_address_prefix(),
-            constants::regtest::B58_PUBKEY_ADDRESS_PREFIX
-        );
-        assert_eq!(
-            regtest.b58_script_address_prefix(),
-            constants::regtest::B58_SCRIPT_ADDRESS_PREFIX
-        );
     }
 }

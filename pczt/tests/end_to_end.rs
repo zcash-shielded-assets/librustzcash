@@ -35,9 +35,7 @@ use zcash_note_encryption::try_note_decryption;
 use zcash_primitives::transaction::{
     builder::{BuildConfig, Builder, BundlePadding, DeferredPcztBuilder, PcztResult},
     fees::zip317,
-    sighash::SignableInput,
-    sighash_v5::v5_signature_hash,
-    txid::TxIdDigester,
+    sighash::{PrecomputedSighashData, SignableInput},
 };
 use zcash_proofs::prover::LocalTxProver;
 use zcash_protocol::{
@@ -133,7 +131,6 @@ fn transparent_to_orchard() {
     let transparent_sk = transparent_account_sk
         .derive_external_secret_key(address_index)
         .unwrap();
-    let secp = secp256k1::Secp256k1::signing_only();
     let transparent_pubkey = transparent_sk.public_key();
     let p2pkh_addr = TransparentAddress::from_pubkey(&transparent_pubkey);
 
@@ -244,13 +241,13 @@ fn transparent_to_orchard() {
     check_round_trip(&pczt);
 
     // Grab the transaction's effects here, as it's easier.
-    let tx_effects = pczt.clone().into_effects().unwrap();
+    let tx_effects =
+        PrecomputedSighashData::new_zip244(pczt.clone().into_effects().unwrap()).unwrap();
 
     // We should now be able to extract the fully authorized transaction.
     let tx = TransactionExtractor::new(pczt)
         .extract(UnwrapErr(SysRng))
         .unwrap();
-    let tx_digests = tx.digest(TxIdDigester);
 
     assert_eq!(u32::from(tx.expiry_height()), 10_000_040);
 
@@ -260,9 +257,8 @@ fn transparent_to_orchard() {
     let txin = bundle.vin.first().unwrap();
     let sighasher = |script_code: &script::Code, hash_type: &zcash_script::signature::HashType| {
         Some(
-            v5_signature_hash(
-                &tx_effects,
-                &SignableInput::Transparent(
+            tx_effects
+                .signature_hash(&SignableInput::Transparent(
                     ::transparent::sighash::SignableInput::from_parts(
                         bundle,
                         match (hash_type.signed_outputs(), hash_type.anyone_can_pay()) {
@@ -291,12 +287,9 @@ fn transparent_to_orchard() {
                         coin.value(),
                     )
                     .unwrap(),
-                ),
-                &tx_digests,
-            )
-            .as_ref()
-            .try_into()
-            .unwrap(),
+                ))
+                .as_ref()
+                .to_owned(),
         )
     };
     let checker = zcash_script::interpreter::CallbackTransactionSignatureChecker {
@@ -432,13 +425,13 @@ fn transparent_p2sh_multisig_to_orchard() {
     check_round_trip(&pczt);
 
     // Grab the transaction's effects here, as it's easier.
-    let tx_effects = pczt.clone().into_effects().unwrap();
+    let tx_effects =
+        PrecomputedSighashData::new_zip244(pczt.clone().into_effects().unwrap()).unwrap();
 
     // We should now be able to extract the fully authorized transaction.
     let tx = TransactionExtractor::new(pczt)
         .extract(UnwrapErr(SysRng))
         .unwrap();
-    let tx_digests = tx.digest(TxIdDigester);
 
     assert_eq!(u32::from(tx.expiry_height()), 10_000_040);
 
@@ -448,9 +441,8 @@ fn transparent_p2sh_multisig_to_orchard() {
     let txin = bundle.vin.first().unwrap();
     let sighasher = |script_code: &script::Code, hash_type: &zcash_script::signature::HashType| {
         Some(
-            v5_signature_hash(
-                &tx_effects,
-                &SignableInput::Transparent(
+            tx_effects
+                .signature_hash(&SignableInput::Transparent(
                     ::transparent::sighash::SignableInput::from_parts(
                         bundle,
                         match (hash_type.signed_outputs(), hash_type.anyone_can_pay()) {
@@ -479,12 +471,9 @@ fn transparent_p2sh_multisig_to_orchard() {
                         coin.value(),
                     )
                     .unwrap(),
-                ),
-                &tx_digests,
-            )
-            .as_ref()
-            .try_into()
-            .unwrap(),
+                ))
+                .as_ref()
+                .to_owned(),
         )
     };
     let checker = zcash_script::interpreter::CallbackTransactionSignatureChecker {
@@ -1146,7 +1135,6 @@ fn pczt_with_anchor(pool: ShieldedPool) -> Pczt {
     let transparent_sk = transparent_account_sk
         .derive_external_secret_key(address_index)
         .unwrap();
-    let secp = secp256k1::Secp256k1::signing_only();
     let transparent_pubkey = transparent_sk.public_key();
 
     let orchard_sk = orchard::keys::SpendingKey::from_bytes([0; 32]).unwrap();

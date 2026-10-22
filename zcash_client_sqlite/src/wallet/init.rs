@@ -1144,11 +1144,13 @@ mod tests {
             )?;
 
             let address = encode_payment_address(
-                wdb.params.hrp_sapling_payment_address(),
+                zcash_address::constants::hrp_sapling_payment_address(wdb.params.network_type()),
                 &extfvk.default_address().1,
             );
             let extfvk = encode_extended_full_viewing_key(
-                wdb.params.hrp_sapling_extended_full_viewing_key(),
+                zcash_keys::constants::hrp_sapling_extended_full_viewing_key(
+                    wdb.params.network_type(),
+                ),
                 extfvk,
             );
             wdb.conn.execute(
@@ -1289,11 +1291,13 @@ mod tests {
             )?;
 
             let address = encode_payment_address(
-                wdb.params.hrp_sapling_payment_address(),
+                zcash_address::constants::hrp_sapling_payment_address(wdb.params.network_type()),
                 &extfvk.default_address().1,
             );
             let extfvk = encode_extended_full_viewing_key(
-                wdb.params.hrp_sapling_extended_full_viewing_key(),
+                zcash_keys::constants::hrp_sapling_extended_full_viewing_key(
+                    wdb.params.network_type(),
+                ),
                 extfvk,
             );
             wdb.conn.execute(
@@ -1481,7 +1485,7 @@ mod tests {
                     .expect("A valid default address exists for the UFVK")
                     .0,
             )
-            .encode_receiver_preserving(&wdb.params);
+            .encode(&wdb.params);
             wdb.conn.execute(
                 "INSERT INTO accounts (account, ufvk, address, transparent_address)
                 VALUES (?, ?, ?, '')",
@@ -1620,10 +1624,7 @@ mod tests {
                 assert_eq!(tvua.transparent(), ua.transparent());
                 assert_eq!(tvua.sapling(), ua.sapling());
                 #[cfg(not(feature = "orchard"))]
-                assert_eq!(
-                    ua.encode_receiver_preserving(&Network::MainNetwork),
-                    tv.unified_addr,
-                );
+                assert_eq!(ua.encode(&Network::MainNetwork), tv.unified_addr);
 
                 db_data
                     .get_next_available_address(account_id, ua_request)

@@ -91,10 +91,10 @@ pub fn zip212_enforcement(params: &impl Parameters, height: BlockHeight) -> Zip2
     if params.is_nu_active(NetworkUpgrade::Canopy, height) {
         let mut grace_period_end_height =
             params.activation_height(NetworkUpgrade::Canopy).unwrap() + ZIP212_GRACE_PERIOD;
-        if let Some(nu5) = params.activation_height(NetworkUpgrade::Nu5) {
-            if nu5 < grace_period_end_height {
-                grace_period_end_height = nu5;
-            }
+        if let Some(nu5) = params.activation_height(NetworkUpgrade::Nu5)
+            && nu5 < grace_period_end_height
+        {
+            grace_period_end_height = nu5;
         }
 
         if height < grace_period_end_height {

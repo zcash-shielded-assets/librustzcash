@@ -3,12 +3,12 @@ pub mod builder;
 pub mod components;
 pub mod fees;
 pub mod sighash;
-pub mod sighash_v4;
-pub mod sighash_v5;
-pub mod sighash_v6;
+mod sighash_v4;
+mod sighash_v5;
+mod sighash_v6;
 
 #[cfg(feature = "zsa")]
-pub mod sighash_v6_zsa;
+mod sighash_v6_zsa;
 
 pub mod txid;
 
@@ -963,7 +963,7 @@ impl<A: Authorization> TransactionData<A> {
             .map_err(E::from)
     }
 
-    /// Computes this transaction's digest using the provided digest strategy.
+    /// Computes this transaction's digests using the provided digest strategy.
     ///
     /// V6 and later transactions include the Ironwood bundle digest as a separate
     /// Orchard-shaped digest with Ironwood personalization. Earlier transaction
@@ -1255,11 +1255,14 @@ impl Transaction {
     }
 
     fn from_data_v5(data: TransactionData<Authorized>) -> Self {
+        assert_eq!(data.version, TxVersion::V5);
+
         let txid = to_txid(
             data.version,
             data.consensus_branch_id,
             &data.digest(TxIdDigester),
-        );
+        )
+        .expect("is v5 tx");
 
         Transaction {
             txid,
@@ -1270,11 +1273,17 @@ impl Transaction {
     }
 
     fn from_data_v6(data: TransactionData<Authorized>) -> Self {
+        #[cfg(not(zcash_unstable = "nutachyon"))]
+        assert_eq!(data.version, TxVersion::V6);
+        #[cfg(zcash_unstable = "nutachyon")]
+        assert!(matches!(data.version, TxVersion::V6 | TxVersion::V7));
+
         let txid = to_txid(
             data.version,
             data.consensus_branch_id,
             &data.digest(TxIdDigester),
-        );
+        )
+        .expect("is v6 tx");
 
         Transaction {
             txid,
@@ -1794,6 +1803,13 @@ impl Transaction {
     }
 }
 
+/// Digests of the prevouts, sequence numbers, and outputs of a transparent bundle.
+///
+/// The personalization of each digest is that of the digest scheme that contains it:
+/// [ZIP 143] in [`Zip143Digests`], and [ZIP 244] in [`Zip244Digests`].
+///
+/// [ZIP 143]: https://zips.z.cash/zip-0143
+/// [ZIP 244]: https://zips.z.cash/zip-0244
 #[derive(Clone, Debug)]
 pub struct TransparentDigests<A> {
     pub prevouts_digest: A,
@@ -1801,21 +1817,94 @@ pub struct TransparentDigests<A> {
     pub outputs_digest: A,
 }
 
+/// Digests of the effecting data of a transaction, computed with the digest scheme that the
+/// transaction's version uses for its signature hashes.
 #[derive(Clone, Debug)]
-pub struct TxDigests<A> {
-    pub header_digest: A,
-    pub transparent_digests: Option<TransparentDigests<A>>,
-    pub sapling_digest: Option<A>,
-    pub orchard_digest: Option<A>,
-    /// The digest of the Ironwood bundle used by version 6 transactions.
+pub enum TxDigests<A> {
+    /// The digests that [ZIP 143] and [ZIP 243] signature hashes commit to, for
+    /// transactions of version 4 and earlier.
     ///
-    /// This is `None` when the transaction has no Ironwood bundle. When a version 6 transaction
-    /// ID is derived from these digests, `None` is combined as the empty Ironwood bundle digest
-    /// using the Ironwood bundle personalization.
-    pub ironwood_digest: Option<A>,
-    /// The digest of the ZSA issue bundle (Zsa V6 transactions).
+    /// [ZIP 143]: https://zips.z.cash/zip-0143
+    /// [ZIP 243]: https://zips.z.cash/zip-0243
+    Zip143(Zip143Digests<A>),
+    /// The digests that make up a [ZIP 244] transaction ID, for transactions of version 5
+    /// and later.
+    ///
+    /// [ZIP 244]: https://zips.z.cash/zip-0244
+    Zip244(Zip244Digests<A>),
+}
+
+/// The digests of a transaction that [ZIP 143] and [ZIP 243] signature hashes commit to.
+///
+/// [ZIP 143]: https://zips.z.cash/zip-0143
+/// [ZIP 243]: https://zips.z.cash/zip-0243
+#[derive(Clone, Debug)]
+pub struct Zip143Digests<A> {
+    /// The digests of the transparent inputs and outputs. A transaction without a
+    /// transparent bundle has the digests of empty input and output lists.
+    pub(crate) transparent: TransparentDigests<A>,
+    /// The digest of the JoinSplits, or `None` if the transaction has none.
+    pub(crate) joinsplits: Option<A>,
+    /// The digest of the Sapling spends, or `None` if the transaction has none.
+    pub(crate) sapling_spends: Option<A>,
+    /// The digest of the Sapling outputs, or `None` if the transaction has none.
+    pub(crate) sapling_outputs: Option<A>,
+}
+
+/// The digests that make up a [ZIP 244] transaction ID.
+///
+/// [ZIP 244]: https://zips.z.cash/zip-0244
+#[derive(Clone, Debug)]
+pub struct Zip244Digests<A> {
+    pub(crate) header_digest: A,
+    pub(crate) transparent_digests: Option<TransparentDigests<A>>,
+    pub(crate) sapling_digest: Option<A>,
+    pub(crate) orchard_digest: Option<A>,
+    pub(crate) ironwood_digest: Option<A>,
+    /// The digest of the ZSA issue bundle of a Zsa transaction, or `None` if it has none.
     #[cfg(feature = "zsa")]
-    pub issue_digest: Option<A>,
+    pub(crate) issue_digest: Option<A>,
+}
+
+impl<A> Zip244Digests<A> {
+    /// Returns the digest of the transaction header.
+    pub fn header_digest(&self) -> &A {
+        &self.header_digest
+    }
+
+    /// Returns the digests of the transparent bundle, or `None` if the transaction has no
+    /// transparent bundle.
+    pub fn transparent_digests(&self) -> Option<&TransparentDigests<A>> {
+        self.transparent_digests.as_ref()
+    }
+
+    /// Returns the digest of the Sapling bundle, or `None` if the transaction has no
+    /// Sapling bundle.
+    pub fn sapling_digest(&self) -> Option<&A> {
+        self.sapling_digest.as_ref()
+    }
+
+    /// Returns the digest of the Orchard bundle, or `None` if the transaction has no
+    /// Orchard bundle.
+    pub fn orchard_digest(&self) -> Option<&A> {
+        self.orchard_digest.as_ref()
+    }
+
+    /// Returns the digest of the Ironwood bundle of a version 6 transaction, or `None` if
+    /// the transaction has no Ironwood bundle.
+    ///
+    /// When a version 6 transaction ID is derived from these digests, `None` is combined as
+    /// the empty Ironwood bundle digest using the Ironwood bundle personalization.
+    pub fn ironwood_digest(&self) -> Option<&A> {
+        self.ironwood_digest.as_ref()
+    }
+
+    /// Returns the digest of the ZSA issue bundle of a Zsa transaction, or `None` if the
+    /// transaction has no issue bundle.
+    #[cfg(feature = "zsa")]
+    pub fn issue_digest(&self) -> Option<&A> {
+        self.issue_digest.as_ref()
+    }
 }
 
 pub trait TransactionDigest<A: Authorization> {

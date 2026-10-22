@@ -4,9 +4,6 @@ use alloc::vec::Vec;
 use core::fmt;
 use corez::io::{self, Read, Write};
 
-use zcash_address::{ToAddress, TryFromAddress, ZcashAddress};
-use zcash_protocol::consensus::NetworkType;
-
 use zcash_encoding::Vector;
 use zcash_script::{
     op,
@@ -199,16 +196,6 @@ impl TransparentAddress {
     pub(crate) fn from_pubkey_bytes(pubkey: &[u8; 33]) -> Self {
         TransparentAddress::PublicKeyHash(hash160::hash(pubkey))
     }
-
-    /// Encodes this transparent address for the given network type.
-    pub fn to_zcash_address(&self, net: NetworkType) -> ZcashAddress {
-        match self {
-            TransparentAddress::PublicKeyHash(data) => {
-                ZcashAddress::from_transparent_p2pkh(net, *data)
-            }
-            TransparentAddress::ScriptHash(data) => ZcashAddress::from_transparent_p2sh(net, *data),
-        }
-    }
 }
 
 /// Returns the encoding of `pubkey` whose HASH160 is `hash`: the 33-byte compressed
@@ -236,24 +223,6 @@ pub(crate) fn p2pkh_pubkey_encoding(hash: &[u8; 20], pubkey: &[u8; 33]) -> Optio
     }
 
     None
-}
-
-impl TryFromAddress for TransparentAddress {
-    type Error = ();
-
-    fn try_from_transparent_p2pkh(
-        _net: NetworkType,
-        data: [u8; 20],
-    ) -> Result<Self, zcash_address::ConversionError<Self::Error>> {
-        Ok(TransparentAddress::PublicKeyHash(data))
-    }
-
-    fn try_from_transparent_p2sh(
-        _net: NetworkType,
-        data: [u8; 20],
-    ) -> Result<Self, zcash_address::ConversionError<Self::Error>> {
-        Ok(TransparentAddress::ScriptHash(data))
-    }
 }
 
 #[cfg(any(test, feature = "test-dependencies"))]

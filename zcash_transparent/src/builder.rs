@@ -899,8 +899,10 @@ mod tests {
     };
     use crate::address::{Script, TransparentAddress};
     use secp256k1::{Message, SecretKey};
-    use zcash_address::ZcashAddress;
     use zcash_protocol::value::Zatoshis;
+
+    /// The pubkey hash of the P2PKH address that the tests pay. Its value is arbitrary.
+    const RECIPIENT_PUBKEY_HASH: [u8; 20] = [0x11; 20];
 
     // Helper that takes a key to create distinct inputs.
     fn new_p2pkh_spend_with_key(
@@ -921,13 +923,7 @@ mod tests {
 
     #[test]
     fn append_and_finalize_signatures() {
-        let addr_str = "tmNUFAr71YAW3eXetm8fhx7k8zpUJYQiKZP";
-        let generic_addr: ZcashAddress = addr_str
-            .parse()
-            .expect("Test address string should be valid");
-        let taddr: TransparentAddress = generic_addr
-            .convert()
-            .expect("Conversion to TransparentAddress should succeed");
+        let taddr = TransparentAddress::PublicKeyHash(RECIPIENT_PUBKEY_HASH);
 
         // Create two inputs with corresponding secret keys for signing
         let (sk1, pk1, coin1, utxo1) = new_p2pkh_spend_with_key([1; 32]);
@@ -1123,9 +1119,7 @@ mod tests {
     fn apply_signatures_p2sh() {
         use super::TransparentSigningSet;
 
-        let addr_str = "tmNUFAr71YAW3eXetm8fhx7k8zpUJYQiKZP";
-        let taddr: TransparentAddress =
-            addr_str.parse::<ZcashAddress>().unwrap().convert().unwrap();
+        let taddr = TransparentAddress::PublicKeyHash(RECIPIENT_PUBKEY_HASH);
 
         let (sks, redeem_script, coin, utxo) = new_p2sh_2of2_spend([1; 32], [2; 32]);
 
@@ -1271,9 +1265,7 @@ mod tests {
     fn apply_signatures_p2sh_missing_key() {
         use super::TransparentSigningSet;
 
-        let addr_str = "tmNUFAr71YAW3eXetm8fhx7k8zpUJYQiKZP";
-        let taddr: TransparentAddress =
-            addr_str.parse::<ZcashAddress>().unwrap().convert().unwrap();
+        let taddr = TransparentAddress::PublicKeyHash(RECIPIENT_PUBKEY_HASH);
 
         let (sks, redeem_script, coin, utxo) = new_p2sh_2of2_spend([1; 32], [2; 32]);
 
